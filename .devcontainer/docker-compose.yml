@@ -1,7 +1,6 @@
 services:
   dev:
     image: lunarzdev/mhseals-dev:linux
-    pull_policy: always
     build:
       context: .
       dockerfile: Dockerfile.dev
@@ -29,7 +28,7 @@ services:
     working_dir: /home/roboboat/roboboat_ws
   sitl:
     image: lunarzdev/mhseals-sitl:linux
-    pull_policy: always
+    pull_policy: missing
     build:
       context: .
       dockerfile: Dockerfile.sitl
