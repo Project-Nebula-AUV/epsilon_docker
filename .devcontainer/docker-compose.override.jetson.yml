@@ -18,6 +18,6 @@ services:
   sitl:
     image: lunarzdev/mhseals-dev:jetson
     volumes:
-      - ./boat.param:/param/boat.param:ro
+      - ./boat.param:/param/boat.param:rw
 volumes:
   zed_resources:

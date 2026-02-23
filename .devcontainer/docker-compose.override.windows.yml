@@ -12,4 +12,4 @@ services:
     environment:
       DISPLAY: host.docker.internal:0
     volumes:
-      - ./boat.param:/param/boat.param:ro
+      - ./boat.param:/param/boat.param:rw

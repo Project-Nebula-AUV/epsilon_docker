@@ -44,7 +44,7 @@ services:
       DISPLAY: ${DISPLAY}
       SITL_EXTRA_ARGS: "--console --add-param-file=/param/boat.param --model JSON:127.0.0.1 --out tcp-l:5762"
     volumes:
-      - ./boat.param:/param/boat.param:ro
+      - ./boat.param:/param/boat.param:rw
       - /tmp/.X11-unix:/tmp/.X11-unix:cached
       - /dev/dri:/dev/dri:cached
     restart: unless-stopped
