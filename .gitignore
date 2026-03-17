@@ -2,4 +2,12 @@ install/
 build/
 log/
 refs/
+bags/
 .devcontainer/docker-compose.override.yml
+src/zed-ros2-wrapper/
+src/direct_lidar_inertial_odometry/
+src/boat_interfaces/
+src/asv_wave_sim/
+src/auto_nav/
+src/mhsboat_ctrl/
+src/rviz-plugin-zed-od/

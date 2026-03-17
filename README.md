@@ -1,12 +1,16 @@
+## Introduction
+
+Welcome to the MHSeals Docker container, serving as an ultra-portable development tool, whether you are working with an NVIDIA Jetson, using a Raspberry Pi, running Windows, using an Arch-based distro, or using a Red Hat distro, you can run this container on anything.
+
 ## Installation
 
-Clone the repo (with packages):
+Clone the repo with submodules:
 
 ```bash
 git clone --recurse-submodules https://github.com/1unarzDev/epsilon.git
 ```
 
-If you didn't include the recurse-submodules flag, then run to pull each needed submodule:
+If you didn't include the recurse-submodules flag, then run the following command to pull each needed submodule:
 
 ```
 git submodule foreach '
@@ -24,7 +28,14 @@ For your convenience, an environment setup script for each OS has been provided.
 ./setup.<OS>.sh
 ```
 
-Now follow the OS-specific instructions below.
+Alternatively, you may manually install the following necessary dependencies as you see fit:
+- Docker
+- NVIDIA Container Toolkit
+- Docker Compose
+- VSCode (or devcontainer CLI)
+- Unity + Vulkan (if you're running the sim, and depending on the available graphics driver)
+
+For manual installation, reference the OS-specific guides below.
 
 ### Linux
 
@@ -62,9 +73,11 @@ Not much to do here, but for manual Docker installation instructions, visit the 
 > npm install -g @devcontainers/cli
 > ```
 
+Anything else you would like to install manually, reference the installation scripts for help on figuring out how to install them.
+
 ### Windows
 
-Install the following programs:
+For manual installation, get the following programs:
 
 - [VcXsrv (X server for display)](https://sourceforge.net/projects/vcxsrv/)
 - [Git](https://git-scm.com/downloads)
@@ -128,3 +141,7 @@ and connect it to ROS by starting the MAVROS node
 ```
 ros2 launch mavros apm.launch fcu_url:=tcp://127.0.0.1:5763
 ```
+
+All of these commands can also be found by running the `help` command in their respective containers.
+
+To run the ROS navigation code, a launch file has been provided for your convenience. Run `ros2 launch mhseals_nav robot.launch.py` with the optional arguments `use_sime_time` (should equal false if running on the actual boat by using `use_sime_time:=false`), `ros_ip` for the Unity simulation IP address, and finally `ros_port` for the simulation port. There are other arguments available for configuring a Zed 2i camera among other things. More details can be found be looking in the `launch` folder.

@@ -54,6 +54,8 @@ RUN python3 -m venv --system-site-packages /workspace/venv \
 ENV PATH=/workspace/venv/bin:$PATH
 
 # Startup setup
-ENV SHELL=/bin/bash
+RUN chown -R $USER:$USER /workspace/venv 
+RUN usermod -aG video,dialout $USERNAME
 USER $USERNAME
+ENV SHELL=/bin/bash
 CMD ["/bin/bash"]

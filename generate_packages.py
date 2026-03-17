@@ -11,6 +11,24 @@ if ignore_file.exists():
     with open(ignore_file, "r") as f:
         ignored_packages = {line.strip() for line in f if line.strip()}
 
+# Helper function to read existing dependencies from a file
+def read_existing(file_path):
+    if file_path.exists():
+        with open(file_path, "r") as f:
+            return {line.strip() for line in f if line.strip()}
+    return set()
+
+# Helper function to append missing dependencies to a file
+def append_to_file(file_path, packages):
+    existing = read_existing(file_path)
+    new_packages = packages - existing
+    if not file_path.exists():
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(file_path, "a") as f:
+        for pkg in sorted(new_packages):
+            f.write(pkg + "\n")
+    return len(new_packages)
+
 # Get pip dependencies listed in packages
 workspace = Path("src")
 requirements = set()
@@ -35,11 +53,10 @@ for setup_file in workspace.rglob("setup.py"):
                         elif hasattr(ast, "Str") and isinstance(elt, ast.Str):
                             requirements.add(elt.s)
 
+req_file = Path("requirements.txt")
 if requirements:
-    with open("requirements.txt", "w") as f:
-        for pkg in sorted(requirements):
-            f.write(pkg + "\n")
-    print(f"✅ Generated requirements.txt with {len(requirements)} packages.")
+    added_count = append_to_file(req_file, requirements)
+    print(f"✅ Updated {req_file} with {added_count} new packages.")
 else:
     print("⚠️ No install_requires found.")
 
@@ -72,23 +89,24 @@ for package_xml in workspace.rglob("package.xml"):
                 apt_packages.add(dep_name)
 
 apt_packages = {f"ros-humble-{p.replace('_', '-')}" for p in apt_packages}
-
+apt_file = Path("apt-packages.txt")
 if apt_packages:
-    with open("apt-packages.txt", "w") as f:
-        for pkg in sorted(apt_packages):
-            f.write(pkg + "\n")
-    print(f"✅ Generated apt-packages.txt with {len(apt_packages)} packages.")
+    added_count = append_to_file(apt_file, apt_packages)
+    print(f"✅ Updated {apt_file} with {added_count} new packages.")
 else:
     print("⚠️ No apt dependencies found.")
-    
+
+# Optionally move files to .devcontainer
 move = input("❓ Would you like to move the files to .devcontainer? [y/N] ")
 if move.lower() == 'y':
     try:
-        shutil.move("requirements.txt", ".devcontainer")
-        print(f"✅ Moved 'requirements.txt' to '.devcontainer'")
-        shutil.move("apt-packages.txt", ".devcontainer")
-        print(f"✅ Moved 'apt-packages.txt' to '.devcontainer'")
-    except:
-        print(f"❌ A file transfer error occured...")
+        devcontainer_dir = Path(".devcontainer")
+        devcontainer_dir.mkdir(exist_ok=True)
+        shutil.move(req_file, devcontainer_dir / req_file.name)
+        print(f"✅ Moved '{req_file}' to '{devcontainer_dir}'")
+        shutil.move(apt_file, devcontainer_dir / apt_file.name)
+        print(f"✅ Moved '{apt_file}' to '{devcontainer_dir}'")
+    except Exception as e:
+        print(f"❌ A file transfer error occurred: {e}")
 
-print("🏁 Package generation complete!")   
+print("🏁 Package generation complete!")

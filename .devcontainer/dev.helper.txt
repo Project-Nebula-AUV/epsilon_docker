@@ -1,6 +1,7 @@
 
 --- Manual MAVROS Command ---
 ros2 launch mavros apm.launch fcu_url:=tcp://127.0.0.1:5762
+ros2 launch mavros apm.launch fcu_url:=/dev/ttyACM0:57600
 
 --- ROS Build Commands ---
 colcon build
@@ -19,3 +20,4 @@ ros2 launch epsilon_nav robot.launch.py
 
 --- ZED Camera Optimization ---
 sudo -E ZED_Diagnostic -aio
+

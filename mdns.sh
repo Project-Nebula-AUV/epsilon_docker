@@ -27,6 +27,12 @@ elif [[ "$ID" == "ubuntu" || "$ID" == "debian" || "$ID_LIKE" == *"debian"* ]]; t
     sudo apt install -y avahi-daemon avahi-utils libnss-mdns
 
     NSS_LINE="hosts: files mdns4_minimal [NOTFOUND=return] dns"
+elif [[ "$ID" == "fedora" || "$ID_LIKE" == *"rhel"* || "$ID_LIKE" == *"fedora"* ]]; then
+    echo "[RPM-based distro] Installing required packages..."
+
+    sudo dnf install -y avahi avahi-tools nss-mdns
+
+    NSS_LINE="hosts: files mdns4_minimal [NOTFOUND=return] dns"
 else
     echo "Unsupported distro: $ID"
     exit 1

@@ -38,8 +38,7 @@ if [[ "$TARGET_PLATFORM" == "nvidia" || "$TARGET_PLATFORM" == "jetson" ]]; then
     ln -sf /lib/x86_64-linux-gnu/libusb-1.0.so.0 /usr/lib/x86_64-linux-gnu/libusb-1.0.so || true
 
     echo "[INFO] Fixing permissions..."
-    chmod -R a+rX /usr/local/zed
-    chmod -R a+rX /workspace/venv/lib
+    chown -R $USERNAME:$USERNAME /usr/local/zed || true
 
     echo "[INFO] Setting environment variables..."
 

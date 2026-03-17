@@ -8,12 +8,16 @@ services:
     runtime: nvidia
     volumes:
       - zed_resources:/usr/local/zed/resources 
+      - /tmp/argus_socket:/tmp/argus_socket
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: all
+      EGL_PLATFORM: surfaceless
+      XDG_RUNTIME_DIR: /tmp/runtime-roboboat
+      QT_QPA_PLATFORM: offscreen
   sitl:
     image: lunarzdev/epsilon-dev:jetson
     volumes:
-      - ./boat.param:/param/boat.param:ro
+      - ./boat.param:/param/boat.param:rw
 volumes:
   zed_resources:

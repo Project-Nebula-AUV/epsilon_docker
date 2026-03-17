@@ -1,7 +1,6 @@
 services:
   dev:
-    image: lunarzdev/epsilon-dev:linux
-    pull_policy: missing
+    image: lunarzdev/mhseals-dev:linux
     build:
       context: .
       dockerfile: Dockerfile.dev
@@ -17,7 +16,7 @@ services:
     ipc: "host"
     pid: "host"
     environment:
-      ROS_LOCALHOST_ONLY: "1"
+      ROS_LOCALHOST_ONLY: "0"
       ROS_DOMAIN_ID: "42"
       ROS_WS: "/home/robosub/robosub_ws"
       DISPLAY: ${DISPLAY}
@@ -43,9 +42,9 @@ services:
     environment:
       VEHICLE: "Rover"
       DISPLAY: ${DISPLAY}
-      SITL_EXTRA_ARGS: "--console --map --add-param-file=/param/boat.param --model JSON:127.0.0.1 --out tcp-l:5762"
+      SITL_EXTRA_ARGS: "--console --add-param-file=/param/boat.param --model JSON:127.0.0.1 --out tcp-l:5762"
     volumes:
-      - ./boat.param:/param/boat.param:ro
+      - ./boat.param:/param/boat.param:rw
       - /tmp/.X11-unix:/tmp/.X11-unix:cached
       - /dev/dri:/dev/dri:cached
     restart: unless-stopped
