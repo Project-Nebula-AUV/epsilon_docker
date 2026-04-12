@@ -179,7 +179,7 @@ setup_os() {
         sudo apt-get update
 
         # Install main packages
-        sudo apt-get install -y -t unstable docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin xwayland \
+        sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin xwayland \
             ca-certificates curl gnupg lsb-release python3-pip apt-transport-https wget jq iptables iptables-persistent nftables
 
         # Install hjson
