@@ -179,8 +179,8 @@ setup_os() {
         sudo apt-get update
 
         # Install main packages
-        sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin xwayland \
-            ca-certificates curl gnupg lsb-release python3-pip software-properties-common apt-transport-https wget jq iptables iptables-persistent nftables
+        sudo apt-get install -y -t unstable docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin xwayland \
+            ca-certificates curl gnupg lsb-release python3-pip apt-transport-https wget jq iptables iptables-persistent nftables
 
         # Install hjson
         if [[ "$ARCH" = "aarch64" ]]; then
@@ -191,10 +191,14 @@ setup_os() {
         curl -sSL $GET | sudo tar -xz -C /usr/local/bin
 
         # Install VSCode
-        wget -q https://packages.microsoft.com/keys/microsoft.asc -O- | sudo apt-key add -
-        sudo add-apt-repository "deb [arch=amd64] https://packages.microsoft.com/repos/vscode stable main"
-        sudo apt update
-        sudo apt install -y code
+        
+        if [ -f /etc/rpi-issue ]; then
+            sudo apt install -y software-properties-common 
+            wget -q https://packages.microsoft.com/keys/microsoft.asc -O- | sudo apt-key add -
+            sudo add-apt-repository "deb [arch=amd64] https://packages.microsoft.com/repos/vscode stable main"
+            sudo apt update
+            sudo apt install -y code
+        fi
     elif [[ "$OS_ID" == "fedora" || "$OS_LIKE" == *"rhel"* || "$OS_LIKE" == *"fedora"* ]]; then
         echo "RPM-based distro detected."
 
