@@ -278,7 +278,9 @@ setup_headless_devcontainer() {
         mkdir -p "$NVM_DIR"
         curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash
         export NVM_DIR="$HOME/.nvm"
+        set +u
         [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        set -u
     else
         echo "NVM installation found."
     fi
