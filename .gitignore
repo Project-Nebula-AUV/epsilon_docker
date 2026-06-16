@@ -11,3 +11,4 @@ src/asv_wave_sim/
 src/auto_nav/
 src/mhsboat_ctrl/
 src/rviz-plugin-zed-od/
+core.*
