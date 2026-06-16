@@ -272,6 +272,7 @@ setup_vscode_settings() {
 }
 
 setup_headless_devcontainer() {
+    set +u
     if ! type nvm &> /dev/null; then
         echo "Installing NVM..."
         export NVM_DIR="$HOME/.nvm"
@@ -288,6 +289,7 @@ setup_headless_devcontainer() {
     
     echo "Installing devcontainers CLI..."
     npm install -g @devcontainers/cli
+    set -u
 }
 
 run_prebuild() {
@@ -298,13 +300,9 @@ run_prebuild() {
 main() {
     sync_time
     detect_os
-    detect_gpus
 
     setup_os
-    setup_gpu
     setup_docker
-    setup_vscode_extensions
-    setup_vscode_settings
     setup_headless_devcontainer
     run_prebuild
     bash mdns.sh || true

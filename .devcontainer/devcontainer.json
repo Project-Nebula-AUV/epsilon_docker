@@ -2,23 +2,16 @@
   "name": "Epsilon Development Container",
   "dockerComposeFile": [
     "docker-compose.yml",
-    "docker-compose.override.yml"
+    "docker-compose.override.rpi.yml"
   ],
   "features": {
     "./features/gazebo": {
       "variant": "none"
     }
-    // "./features/zed-sdk": {
-    //   "zed_sdk_version": "5.1",
-    //   "cuda_version": "12.8",
-    //   "ubuntu_release_year": "22",
-    //   "l4t_version": "36.4"
-    // }
   },
   "service": "dev",
   "runServices": [
-    "dev",
-    "sitl"
+    "dev"
   ],
   "workspaceFolder": "/home/robosub/robosub_ws",
   "postCreateCommand": ".devcontainer/postcreate.sh",
