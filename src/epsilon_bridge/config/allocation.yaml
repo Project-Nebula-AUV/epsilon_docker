@@ -1,0 +1,19 @@
+# Epsilon thruster allocation matrix A (6 thrusters x 5 wrench axes).
+# Each row below is a wrench AXIS column listing the 6 thruster values [t0..t5]:
+#   t0,t1 = vertical pair (omni_control idx 0,1);  t2..t5 = 45deg corners (idx 2..5).
+# thrust_control[t] = sum_axis( A[t][axis] * wrench[axis] ) * 100, saturated to +-100.
+#
+# surge/sway/yaw are MEASURED from the epsilon_teleop basis logs (values /100):
+#   surge  <- forwardbackward.log corners [2,3,4,5] = [-92,-96,+100,+100]
+#   sway   <- sideside.log        corners [2,3,4,5] = [+92,-96,-100,+100]
+#   yaw    <- yaw.log all-corners-equal (CCW), uniform [+1,+1,+1,+1]
+# heave/roll act on the vertical pair t0,t1 (heave = common, roll = differential).
+#   The two undetermined SIGNS are applied at runtime via the thruster_bridge
+#   params heave_sign / roll_sign (default +1) -> flip at P4 (heave likely inverted:
+#   sub is ~1N positively buoyant, steady -22.8 down-trim).
+allocation:
+  surge: [0.0,  0.0, -0.92, -0.96,  1.0,  1.0]
+  sway:  [0.0,  0.0,  0.92, -0.96, -1.0,  1.0]
+  heave: [1.0,  1.0,  0.0,   0.0,   0.0,  0.0]
+  yaw:   [0.0,  0.0,  1.0,   1.0,   1.0,  1.0]
+  roll:  [1.0, -1.0,  0.0,   0.0,   0.0,  0.0]

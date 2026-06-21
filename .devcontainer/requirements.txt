@@ -1,6 +1,13 @@
 matplotlib
+# NumPy 2 is pulled in by opencv-contrib-python (4.13). The distro cv_bridge is built against
+# NumPy 1.x, so it is rebuilt from src/ against NumPy 2 in postcreate.sh. Pin >=2 to keep the
+# ABI consistent with that rebuild.
+numpy>=2
 opencv-contrib-python
 pyyaml
 scikit-learn
 setuptools
 transforms3d
+adafruit-blinka
+adafruit-circuitpython-bno055
+lgpio

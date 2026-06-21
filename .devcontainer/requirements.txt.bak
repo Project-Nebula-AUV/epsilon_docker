@@ -1,0 +1,9 @@
+matplotlib
+opencv-contrib-python
+pyyaml
+scikit-learn
+setuptools
+transforms3d
+adafruit-blinka
+adafruit-circuitpython-bno055
+lgpio

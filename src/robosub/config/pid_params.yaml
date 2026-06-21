@@ -1,0 +1,28 @@
+# PID / control gains for the submarine AI.
+# These will eventually be ROS parameters (loaded via rclpy at node start,
+# or updated at runtime via ros2 param set).
+
+# --- Yaw (PD) ---
+# align_yaw_p_gain  normalised pixel error (-1..1) → yaw command
+# hover_yaw_p_gain  degrees of heading error → yaw command
+# yaw_d_gain        gyro_z (rad/s) → opposing yaw command
+align_yaw_p_gain: 0.4
+hover_yaw_p_gain: 0.02
+yaw_d_gain: 3.0
+
+damping_gain: 1.5           # Linear velocity damping (surge/sway)
+maneuver_damping_gain: 3.0  # Sway damping during maneuvers
+
+# --- Vertical (depth / pitch) gains ---
+depth_p_gain: 2.5
+depth_i_gain: 0.15          # Slow wind-up to avoid integral overshoot
+depth_d_gain: 4.0           # Strong damping on velocity
+roll_p_gain: 0.8
+roll_d_gain: 1.0
+
+# --- Depth integrator ---
+integral_clamp_z: 4.0       # = buoyancy_offset / I_GAIN = 0.6 / 0.15
+
+# --- Vision thresholds ---
+min_pixels_for_detection: 20
+min_gate_pixels: 50

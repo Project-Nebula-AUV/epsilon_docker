@@ -9,6 +9,9 @@ services:
     volumes: []
     privileged: true
     restart: unless-stopped
+    group_add:
+      - "986"   # gpio (host /dev/gpiochip* group)
+      - "988"   # i2c  (host /dev/i2c-* group)
   sitl:
     image: lunarzdev/epsilon-sitl:rpi
     environment:
