@@ -17,12 +17,19 @@
 # Buoyancy trim: the sub is ~1 N positively buoyant, so with HEAVE_BIAS=0.0 it
 # will slowly rise (the fail-safe). To hold depth, raise HEAVE_BIAS toward ~0.5
 # (start small, e.g. 0.3) once you have watched a run. +heave = descend.
+#
+# Camera color: GRAY_WORLD=1 (default) software-neutralizes the OV9782 warm tint
+# so the red gate / white buoy thresholds read true colors. Set GRAY_WORLD=0 for raw.
 # =============================================================================
 set -u
 
 HEAVE_BIAS="${HEAVE_BIAS:-0.0}"             # 0.0 = neutral/surfaces; ~0.5 = hold vs buoyancy
 SYNTHETIC_DEPTH="${SYNTHETIC_DEPTH:-1.5}"   # must equal MISSION_DEPTH in robosub/mission.py
 ARM_DELAY="${ARM_DELAY:-10}"                # seconds between stack-up and arming
+GRAY_WORLD="${GRAY_WORLD:-1}"               # 1 = software-neutralize the camera warm tint (default on); 0 = raw
+
+# launch wants a bool string for the camera param
+GW_ARG=$([ "$GRAY_WORLD" = "1" ] && echo true || echo false)
 
 source /opt/ros/humble/setup.bash
 source /home/robosub/robosub_ws/install/setup.bash
@@ -41,9 +48,9 @@ cleanup() {
 trap cleanup INT TERM
 
 # Bring up sensors + bridges (thruster_bridge DISARMED) + omni_control + nav brain.
-echo "[prequal] launching full stack (disarmed): synthetic_depth=${SYNTHETIC_DEPTH} heave_bias=${HEAVE_BIAS}"
+echo "[prequal] launching full stack (disarmed): synthetic_depth=${SYNTHETIC_DEPTH} heave_bias=${HEAVE_BIAS} gray_world=${GRAY_WORLD}"
 ros2 launch epsilon_bridge prequal.launch.py \
-    synthetic_depth:="${SYNTHETIC_DEPTH}" heave_bias:="${HEAVE_BIAS}" &
+    synthetic_depth:="${SYNTHETIC_DEPTH}" heave_bias:="${HEAVE_BIAS}" gray_world:="${GW_ARG}" &
 STACK_PID=$!
 
 # Countdown: submerge the sub and stand clear. Thrusters are still disarmed here.

@@ -32,6 +32,8 @@ def generate_launch_description():
         DeclareLaunchArgument('with_imu', default_value='true'),
         DeclareLaunchArgument('with_depth', default_value='true'),
         DeclareLaunchArgument('with_camera', default_value='true'),
+        # camera software white balance: neutralize the OV9782 warm tint
+        DeclareLaunchArgument('gray_world', default_value='false'),
         # sensor_bridge sign params -- confirmed +1 at P4 (in-sub IMU orientation)
         DeclareLaunchArgument('heading_sign', default_value='1.0'),
         DeclareLaunchArgument('yaw_rate_sign', default_value='1.0'),
@@ -53,6 +55,8 @@ def generate_launch_description():
     depth = Node(package='epsilon_sensors', executable='depth_sensor', name='depth_sensor', output='screen',
                  condition=IfCondition(LaunchConfiguration('with_depth')))
     camera = Node(package='epsilon_sensors', executable='camera', name='camera', output='screen',
+                  parameters=[{'gray_world': ParameterValue(
+                      LaunchConfiguration('gray_world'), value_type=bool)}],
                   condition=IfCondition(LaunchConfiguration('with_camera')))
 
     sensor_bridge = Node(

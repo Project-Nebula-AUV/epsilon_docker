@@ -39,6 +39,7 @@ def generate_launch_description():
         DeclareLaunchArgument('synthetic_depth', default_value='1.5'),  # = MISSION_DEPTH
         DeclareLaunchArgument('heave_bias', default_value='0.0'),       # buoyancy trim
         DeclareLaunchArgument('with_depth', default_value='false'),     # MS5837 is dead
+        DeclareLaunchArgument('gray_world', default_value='false'),     # camera tint fix
     ]
 
     hardware = IncludeLaunchDescription(
@@ -47,6 +48,7 @@ def generate_launch_description():
             'with_depth': LaunchConfiguration('with_depth'),
             'synthetic_depth': LaunchConfiguration('synthetic_depth'),
             'heave_bias': LaunchConfiguration('heave_bias'),
+            'gray_world': LaunchConfiguration('gray_world'),
         }.items(),
     )
 
