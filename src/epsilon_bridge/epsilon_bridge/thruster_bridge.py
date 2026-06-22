@@ -32,6 +32,12 @@ class ThrusterBridge(Node):
         self.watchdog_timeout = float(self.declare_parameter('watchdog_timeout', 0.1).value)
         self.heave_sign = float(self.declare_parameter('heave_sign', 1.0).value)
         self.roll_sign = float(self.declare_parameter('roll_sign', 1.0).value)
+        # Constant buoyancy-trim added to the reconstructed heave wrench (nav-heave
+        # convention: +heave = descend). Replaces the steady descend thrust the depth
+        # integrator normally provides (~0.6) when running WITHOUT a depth sensor and
+        # holding depth open-loop. 0.0 = neutral (sub slowly surfaces, the fail-safe);
+        # increase toward ~+0.5 in-water to hold against positive buoyancy.
+        self.heave_bias = float(self.declare_parameter('heave_bias', 0.0).value)
         self.armed = bool(self.declare_parameter('start_armed', False).value)
         alloc_path = str(self.declare_parameter('allocation_file', '').value)
 
@@ -46,8 +52,8 @@ class ThrusterBridge(Node):
         self.create_timer(0.02, self.on_watchdog)  # 50 Hz watchdog tick
         self._zero()
         self.get_logger().info(
-            'thruster_bridge up (armed=%s, watchdog=%.3fs, heave_sign=%g, roll_sign=%g)'
-            % (self.armed, self.watchdog_timeout, self.heave_sign, self.roll_sign))
+            'thruster_bridge up (armed=%s, watchdog=%.3fs, heave_sign=%g, roll_sign=%g, heave_bias=%g)'
+            % (self.armed, self.watchdog_timeout, self.heave_sign, self.roll_sign, self.heave_bias))
 
     def _load_allocation(self, path):
         if not path:
@@ -69,8 +75,10 @@ class ThrusterBridge(Node):
             self.get_logger().warn('thruster_commands had %d elts (<6), ignoring' % len(d))
             return
         hfl, hfr, hal, har, vp, vs = d[0], d[1], d[2], d[3], d[4], d[5]
-        # invert the sim mix -> wrench (heave/roll signs are the two P4 unknowns)
-        heave = self.heave_sign * (vp + vs) / 2.0
+        # invert the sim mix -> wrench (heave/roll signs are the two P4 unknowns).
+        # heave_bias adds a constant descend trim (nav-heave convention) for
+        # depth-sensorless open-loop hold; heave_sign maps it to the right motor sign.
+        heave = self.heave_sign * ((vp + vs) / 2.0 + self.heave_bias)
         roll = self.roll_sign * (vp - vs) / 2.0
         surge = (hfl + hfr + hal + har) / (4.0 * COS45)
         sway = ((hfl + har) - (hfr + hal)) / 4.0 / COS45

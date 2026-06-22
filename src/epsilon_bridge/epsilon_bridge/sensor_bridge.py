@@ -30,6 +30,13 @@ class SensorBridge(Node):
     (default +1); the yaw-loop sign is a single bit to confirm/flip at P4.
     No deps beyond rclpy + msgs, so it runs under the same python as the other
     nav nodes (system python via the install shebang).
+
+    The published roll channel is mapped from the euler pitch (the BNO055 is
+    mounted rotated 90deg about the shared Z) and reads a fixed mounting offset
+    (~85deg) at rest. Since the sub is reliably LEVEL at power-on, we capture that
+    offset from the first level_capture_secs of valid frames and subtract it
+    (capture_level_on_start, default on) so roll reads ~0 when level. With capture
+    off, the static roll_offset_deg param is subtracted instead.
     """
 
     def __init__(self):
@@ -39,6 +46,22 @@ class SensorBridge(Node):
         self.yaw_rate_sign = float(self.declare_parameter('yaw_rate_sign', 1.0).value)
         self.roll_rate_sign = float(self.declare_parameter('roll_rate_sign', 1.0).value)
         self.heading_offset_deg = float(self.declare_parameter('heading_offset_deg', 0.0).value)
+        # Roll zeroing: assume level at power-on and capture the mounting offset.
+        self.capture_level_on_start = bool(self.declare_parameter('capture_level_on_start', True).value)
+        self.level_capture_secs = float(self.declare_parameter('level_capture_secs', 1.5).value)
+        self.roll_offset_deg = float(self.declare_parameter('roll_offset_deg', 0.0).value)
+        # Depth-sensorless hold: when synthetic_depth >= 0, ignore /depth and publish
+        # this constant on /sensors/depth instead. Set it equal to the mission target
+        # depth (MISSION_DEPTH, 1.5 m) so the nav's depth_error is ~0 -> the depth PID
+        # commands ~zero heave (neutral hold) and StabilizeTask's depth gate is met so
+        # the mission advances. The sub is started already submerged; vertical buoyancy
+        # trim (the ~0.6 heave the integrator can no longer supply) is handled by
+        # thruster_bridge's heave_bias param. -1.0 disables (real /depth passthrough).
+        self.synthetic_depth = float(self.declare_parameter('synthetic_depth', -1.0).value)
+        # _roll_offset is the active offset (deg). None => still capturing at boot.
+        self._roll_offset = None if self.capture_level_on_start else self.roll_offset_deg
+        self._cap_samples = []
+        self._cap_start = None
 
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                          history=HistoryPolicy.KEEP_LAST, depth=1)
@@ -51,7 +74,32 @@ class SensorBridge(Node):
         self.create_subscription(Imu, '/imu', self.on_imu, 10)
         self.create_subscription(Float32, '/depth', self.on_depth, 10)
         self.create_timer(0.05, self.on_velocity_timer)  # zeros, no DVL
-        self.get_logger().info('sensor_bridge up (roll-rate=raw.y, yaw-rate=raw.z)')
+        if self.synthetic_depth >= 0.0:
+            self.create_timer(0.05, self.on_synthetic_depth_timer)  # 20 Hz constant
+        mode = ('capture@boot %.1fs' % self.level_capture_secs
+                if self.capture_level_on_start else 'static %.2f deg' % self.roll_offset_deg)
+        depth_mode = ('SYNTHETIC %.2f m (depth sensor bypassed)' % self.synthetic_depth
+                      if self.synthetic_depth >= 0.0 else 'passthrough /depth')
+        self.get_logger().info(
+            'sensor_bridge up (roll-rate=raw.y, yaw-rate=raw.z; roll zeroing: %s; depth: %s)'
+            % (mode, depth_mode))
+
+    def _roll_offset_now(self, pitch_deg):
+        """Resolve the roll offset (deg). While capturing, accumulate samples and
+        return the running mean (so output stays ~0); finalize after the window."""
+        if self._roll_offset is not None:
+            return self._roll_offset
+        now = self.get_clock().now()
+        if self._cap_start is None:
+            self._cap_start = now
+        self._cap_samples.append(pitch_deg)
+        mean = sum(self._cap_samples) / len(self._cap_samples)
+        if (now - self._cap_start).nanoseconds * 1e-9 >= self.level_capture_secs:
+            self._roll_offset = mean
+            self.get_logger().info(
+                'level-at-boot roll offset captured: %.2f deg (%d samples)'
+                % (self._roll_offset, len(self._cap_samples)))
+        return mean
 
     def on_imu(self, msg):
         out = Imu()
@@ -70,13 +118,19 @@ class SensorBridge(Node):
         if (q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z) < 1e-6:
             return  # no valid orientation yet
         _r, pitch, yaw = _quat_to_euler(q.w, q.x, q.y, q.z)
+        pitch_deg = math.degrees(pitch)
         heading = (math.degrees(yaw) * self.heading_sign + self.heading_offset_deg) % 360.0
-        roll = math.degrees(pitch) * self.roll_sign
+        roll = (pitch_deg - self._roll_offset_now(pitch_deg)) * self.roll_sign
         self.pub_heading.publish(Float32(data=float(heading)))
         self.pub_roll.publish(Float32(data=float(roll)))
 
     def on_depth(self, msg):
+        if self.synthetic_depth >= 0.0:
+            return  # depth sensor bypassed; on_synthetic_depth_timer publishes instead
         self.pub_depth.publish(Float32(data=float(msg.data)))
+
+    def on_synthetic_depth_timer(self):
+        self.pub_depth.publish(Float32(data=float(self.synthetic_depth)))
 
     def on_velocity_timer(self):
         self.pub_vel.publish(Twist())

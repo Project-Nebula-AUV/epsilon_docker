@@ -23,8 +23,14 @@ WHITE_HSV_RANGE = [((0, 0, 70), (360, 25, 100))]
 # --- VERY WIDE GRAY Range (for testing) ---
 # Any Hue, Low Saturation, Wide Value range
 GRAY_HSV_RANGE = [((0, 0, 20), (360, 50, 90))] # Was S:0-35, V:30-80
-# --- NEW: HSV Range for the green marker ---
-GREEN_HSV_RANGE = [((100, 40, 40), (140, 100, 100))]
+# --- Marker/buoy color: TEMPORARILY WHITE for this course (was green) ---
+# The pole/buoy detector (data_structures.Vision -> green_blobs) uses this range.
+# To revert to the green buoy, restore the commented green line below.
+# GREEN_HSV_RANGE = [((100, 40, 40), (140, 100, 100))]   # original green marker
+# White = any hue, low saturation, bright value. NOTE: white is easy to confuse
+# with pool walls / surface glare / bubbles -- if it false-triggers, raise the V
+# floor (e.g. 80) or lower the S ceiling (e.g. 18).
+GREEN_HSV_RANGE = [((0, 0, 70), (360, 25, 100))]
 
 
 @dataclass

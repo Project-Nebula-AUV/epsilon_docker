@@ -10,8 +10,9 @@ services:
     privileged: true
     restart: unless-stopped
     group_add:
-      - "986"   # gpio (host /dev/gpiochip* group)
-      - "988"   # i2c  (host /dev/i2c-* group)
+      - "986"   # gpio  (host /dev/gpiochip* group)
+      - "988"   # i2c   (host /dev/i2c-* group)
+      - "44"    # video (host /dev/video* group; USB OV9782 camera)
   sitl:
     image: lunarzdev/epsilon-sitl:rpi
     environment:
