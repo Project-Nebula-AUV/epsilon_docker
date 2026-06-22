@@ -9,6 +9,3 @@
 [submodule "src/epsilon_teleop"]
 	path = src/epsilon_teleop
 	url = https://github.com/Project-Nebula-AUV/epsilon_teleop.git
-[submodule "src/epsilon_teleop"]
-	path = src/epsilon_teleop
-	url = https://github.com/Project-Nebula-AUV/epsilon_sensors.git
