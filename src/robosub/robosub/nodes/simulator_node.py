@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import math
 import random
 
@@ -58,6 +59,12 @@ class SimulatorNode(Node):
             self.create_subscription(Float32, '/depth_fusion/velocity_z',
                                      self._fused_vz_cb, 10)
         self.frame_id = self.declare_parameter('frame_id', 'imu_link').value
+        # Ground-truth trajectory + course-geometry log for post-run judging
+        # (judge.py). On by default: the files are small and every sim run is
+        # a test run.
+        self.truth_log = bool(self.declare_parameter('truth_log', True).value)
+        self._truth_file = None
+        self._truth_t0 = None
 
         self._image_pub    = self.create_publisher(Image,             '/camera/image_raw', 10)
         self._depth_pub    = self.create_publisher(Float32,           '/sensors/depth',    self.qos)
@@ -123,6 +130,9 @@ class SimulatorNode(Node):
         # Ground truth, always -- lets fused depth be scored against reality.
         self._true_depth_pub.publish(Float32(data=float(p.z)))
 
+        if self.truth_log:
+            self._write_truth(p)
+
         # Depth: ground-truth passthrough, or emulated raw sensor for fusion.
         if self.fuse_depth:
             self._publish_emulated_depth_raw(p.z, dt)
@@ -157,26 +167,63 @@ class SimulatorNode(Node):
         camera_np = np.ascontiguousarray(np.transpose(pygame.surfarray.array3d(self.sim.cameraSurface), (1, 0, 2))[:, :, ::-1])
         self._image_pub.publish(self._bridge.cv2_to_imgmsg(camera_np, encoding='bgr8'))
 
+    def _write_truth(self, p):
+        """Append the ground-truth pose to /tmp/sim_truth.csv and dump the
+        course geometry to /tmp/sim_geom.json once (judge.py reads both)."""
+        if self._truth_file is None:
+            self._truth_file = open('/tmp/sim_truth.csv', 'w')
+            self._truth_file.write('t,x,y,z,heading,roll,task,state\n')
+            self._truth_t0 = float(self.get_clock().now().nanoseconds) * 1e-9
+            geom = {'gate': None, 'poles': []}
+            g = getattr(self.sim, 'prequal_gate', None)
+            if g is not None:
+                geom['gate'] = {'x': float(g.x), 'center_y': float(g.center_y),
+                                'z_top': float(g.z_top), 'width': float(g.width),
+                                'height': float(g.height)}
+            for pl in getattr(self.sim, 'slalom_poles', []):
+                c = getattr(pl, 'color', (0, 0, 0))
+                geom['poles'].append({'x': float(pl.x), 'y': float(pl.y),
+                                      'z': float(pl.z),
+                                      'height': float(pl.height),
+                                      'red': bool(c[0] > c[1] + 40)})
+            with open('/tmp/sim_geom.json', 'w') as f:
+                json.dump(geom, f)
+        t = float(self.get_clock().now().nanoseconds) * 1e-9 - self._truth_t0
+        self._truth_file.write('%.3f,%.4f,%.4f,%.4f,%.2f,%.2f,%s,%s\n' % (
+            t, p.x, p.y, p.z, p.heading, p.roll,
+            getattr(self.sim, 'ros_task_name', ''),
+            getattr(self.sim, 'ros_state_name', '')))
+        self._truth_file.flush()
+
     def _publish_raw_imu(self, imu, roll_deg, now):
         """Publish the hardware-side /imu + /imu/gravity the fusion consumes.
 
-        The sim body frame here matches the on-vehicle raw IMU convention
-        used by depth_fusion: x=sway(right), y=surge(forward), z=heave(DOWN).
-        Gravity is therefore +Z when level and tilts with roll, so the
-        gravity-projection path recovers the true vertical no matter the
-        sub's attitude -- the same property we rely on in the water.
+        Raw IMU convention (matches the vehicle): BODY frame with x=sway
+        (starboard), y=surge (forward), z=heave (down); linear acceleration
+        is kinematic (gravity-removed), gravity is the down direction
+        expressed in the SAME body frame. Both must rotate together with
+        roll (about the forward axis) — a real accelerometer is bolted to
+        the hull. Then the fusion's projection a.g/|g| returns the true
+        world vertical acceleration at ANY attitude:
+            a_vert = (ax*cos r - az*sin r)(-sin r) + (ax*sin r + az*cos r)(cos r)
+                   = az_world.
+        (An earlier version published world-frame accel with tilted gravity;
+        past 90 degrees of roll the projection FLIPPED SIGN, the fused
+        estimate ran away and nav chased it to the surface mid-style-roll.)
         """
+        r = math.radians(roll_deg)
+        cr, sr = math.cos(r), math.sin(r)
+        ax_w, ay_w, az_w = float(imu.accel_x), float(imu.accel_y), float(imu.accel_z)
         raw = Imu()
         raw.header.stamp = now
         raw.header.frame_id = self.frame_id
         raw.angular_velocity.x = float(imu.gyro_x)
         raw.angular_velocity.z = float(imu.gyro_z)
-        raw.linear_acceleration.x = float(imu.accel_x)
-        raw.linear_acceleration.y = float(imu.accel_y)
-        raw.linear_acceleration.z = float(imu.accel_z)
+        raw.linear_acceleration.x = ax_w * cr - az_w * sr
+        raw.linear_acceleration.y = ay_w
+        raw.linear_acceleration.z = ax_w * sr + az_w * cr
         # Orientation quaternion (roll about x, pitch 0, yaw=heading) -- only
         # the fusion's fallback path uses it; the gravity vector is primary.
-        r = math.radians(roll_deg)
         y = math.radians(self.sim.subPhysics.heading)
         cr, sr, cy, sy = math.cos(r / 2), math.sin(r / 2), math.cos(y / 2), math.sin(y / 2)
         raw.orientation.w = cr * cy
@@ -185,13 +232,14 @@ class SimulatorNode(Node):
         raw.orientation.z = cr * sy
         self._raw_imu_pub.publish(raw)
 
-        # Gravity vector (down-positive Z, tilted by roll about the x-axis).
+        # Gravity (down) in the SAME rolled body frame: world (0,0,+G)
+        # rotated by -r about the forward axis -> (-G sin r, 0, G cos r).
         g = Vector3Stamped()
         g.header.stamp = now
         g.header.frame_id = self.frame_id
-        g.vector.x = 0.0
-        g.vector.y = _G * math.sin(r)
-        g.vector.z = _G * math.cos(r)
+        g.vector.x = -_G * sr
+        g.vector.y = 0.0
+        g.vector.z = _G * cr
         self._gravity_pub.publish(g)
 
     def _publish_emulated_depth_raw(self, true_z, dt):

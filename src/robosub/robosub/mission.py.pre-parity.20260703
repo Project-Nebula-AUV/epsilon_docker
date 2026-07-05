@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""
+Mission plan for the pre-qualification course.
+
+Edit this file to change the mission without touching node or task code.
+
+Set the environment variable ROBOSUB_MISSION=hold to run a station-keeping
+hold instead of the pre-qual mission (see create_mission below).
+
+Set ROBOSUB_STYLE_ROLL=720 to add a barrel roll (style points) in front of the
+outbound gate. Default 0 = OFF. SIM ONLY for now: on the real vehicle depth is
+held open-loop (synthetic_depth + heave_bias), which cannot survive inversion,
+and the folded roll telemetry / thruster roll authority are unproven — do not
+enable on hardware until closed-loop depth works and the roll has been
+bench-checked.
+"""
+import os
+
+from robosub.sub.tasks.stabilize_task import StabilizeTask
+from robosub.sub.tasks.gate_task import GateTask
+from robosub.sub.tasks.orbit_turn_task import OrbitTurnTask
+from robosub.sub.tasks.shutdown_task import ShutdownTask
+
+# ---------------------------------------------------------------------------
+# Depths
+# ---------------------------------------------------------------------------
+MISSION_DEPTH = 1.5   # meters — running depth for all tasks
+SURFACE_DEPTH = 0.1   # meters — come back up at end of run
+
+# ---------------------------------------------------------------------------
+# Mission
+# ---------------------------------------------------------------------------
+
+def create_mission():
+    # Station-keep / hold mode: ROBOSUB_MISSION=hold runs a single StabilizeTask
+    # that never completes (velocity is zeroed and depth is synthetic, so the only
+    # completion gate is the timer). The sub locks heading on the first tick and
+    # damps toward target_roll=0, so it actively rejects yaw + roll disturbances
+    # (closed-loop from the IMU) and holds depth open-loop (heave_bias). It does
+    # NOT advance to the gate search. Used by .devcontainer/motortest.sh.
+    if os.environ.get('ROBOSUB_MISSION', '').lower() == 'hold':
+        return [StabilizeTask(duration=1e9, target_depth=MISSION_DEPTH)]
+
+    # Barrel roll before the outbound gate — env-gated, defaults OFF (see header)
+    style_roll = float(os.environ.get('ROBOSUB_STYLE_ROLL', '0') or '0')
+
+    return_gate = GateTask(target_depth=MISSION_DEPTH)
+    return_gate.search_direction = -1   # search opposite direction on return
+
+    return [
+        # Dive and hold before starting
+        StabilizeTask(target_depth=MISSION_DEPTH),
+
+        # Pass through the gate
+        GateTask(target_depth=MISSION_DEPTH, style_roll_degrees=style_roll),
+        StabilizeTask(duration=2.0, target_depth=MISSION_DEPTH),
+
+        # Orbit the green pole until the gate reappears, then clear it
+        OrbitTurnTask(
+            target_depth=MISSION_DEPTH,
+            approach_height_px=180,
+            orbit_target_fraction=0.5,
+            orbit_sway_power=-0.15,
+            orbit_yaw_gain=2.5,
+            min_orbit_time=8.0,
+            orbit_target_width_fraction=0.20,
+            final_sway_power=-0.5,
+        ),
+        StabilizeTask(duration=2.0, target_depth=MISSION_DEPTH),
+
+        # Return through the gate
+        return_gate,
+        StabilizeTask(duration=2.0, target_depth=MISSION_DEPTH),
+
+        ShutdownTask(),
+    ]

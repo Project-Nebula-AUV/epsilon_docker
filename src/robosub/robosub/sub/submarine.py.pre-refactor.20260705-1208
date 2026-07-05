@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+"""
+Contains the Submarine class — the brain of the control stack.
+
+Manages the mission plan, PID controllers, and all control helper methods.
+No pygame, no ROS — pure Python/numpy. Receives a SensorSuite each tick,
+returns ThrusterCommands.
+"""
+import math
+import os
+import numpy as np
+import yaml
+from typing import Tuple, List, Optional
+
+from robosub.sub.data_structures import ThrusterCommands, SensorSuite, Vision
+from robosub.sub.config import SimulationConfig
+from robosub.sub.utils import angle_diff
+from robosub.sub.tasks.task_base import Task, TaskStatus
+
+# Default gains — overridden by pid_params.yaml when present.
+# Structured to match future ROS parameter names (snake_case).
+_DEFAULT_PID = {
+    # Cascade yaw architecture:
+    #   outer P: error → desired angular rate (rad/s)
+    #   inner P: rate error → thrust command  (this is what YAW_D_GAIN now does)
+    #   max_yaw_rate: caps the desired rate so D always has headroom
+    'align_yaw_p_gain':      0.4,   # normalised pixel error → yaw command
+    'hover_yaw_p_gain':      0.02,  # degrees of heading error → yaw command
+    'yaw_d_gain':            3.0,   # gyro_z (rad/s) → opposing yaw command
+    'damping_gain':          1.5,
+    'maneuver_damping_gain': 3.0,
+    'depth_p_gain':          2.5,
+    'depth_i_gain':          0.15,
+    'depth_d_gain':          4.0,
+    'roll_p_gain':           0.8,
+    'roll_d_gain':           1.0,
+    'integral_clamp_z':      4.0,
+    'min_pixels_for_detection': 20,
+    'min_gate_pixels':       50,
+}
+
+# submarine.py lives at:  src/robosub/robosub/sub/submarine.py
+# pid_params.yaml lives at: src/robosub/config/pid_params.yaml
+# So go up 2 levels from robosub/sub/ to reach src/robosub/, then into config/.
+_CONFIG_FILE = os.path.join(
+    os.path.dirname(__file__),   # …/robosub/sub/
+    '..', '..',                  # …/robosub/  (the ROS2 package root)
+    'config', 'pid_params.yaml'
+)
+
+
+def _load_pid_params() -> dict:
+    """Load gains from YAML, falling back to defaults for any missing key."""
+    params = dict(_DEFAULT_PID)
+    path = os.path.normpath(_CONFIG_FILE)
+    if os.path.isfile(path):
+        with open(path) as f:
+            overrides = yaml.safe_load(f) or {}
+        params.update({k: v for k, v in overrides.items() if k in params})
+        print(f"INFO: PID params loaded from {path}")
+    else:
+        print(f"WARN: pid_params.yaml not found at {path}, using built-in defaults")
+    return params
+
+
+class Submarine:
+    def __init__(self, mission_plan: List[Task]):
+
+        p = _load_pid_params()
+
+        # --- Horizontal gains ---
+        self.ALIGN_YAW_P_GAIN       = p['align_yaw_p_gain']
+        self.HOVER_YAW_P_GAIN       = p['hover_yaw_p_gain']
+        self.YAW_D_GAIN             = p['yaw_d_gain']
+        self.DAMPING_GAIN           = p['damping_gain']
+        self.MANEUVER_DAMPING_GAIN  = p['maneuver_damping_gain']
+
+        # --- Vertical (depth/roll) gains ---
+        self.DEPTH_P_GAIN  = p['depth_p_gain']
+        self.DEPTH_I_GAIN  = p['depth_i_gain']
+        self.DEPTH_D_GAIN  = p['depth_d_gain']
+        self.ROLL_P_GAIN   = p['roll_p_gain']
+        self.ROLL_D_GAIN   = p['roll_d_gain']
+
+        # --- Depth integrator ---
+        self.integral_z_err    = 0.0
+        self.integral_clamp_z  = p['integral_clamp_z']
+
+        self.MIN_PIXELS_FOR_DETECTION = int(p['min_pixels_for_detection'])
+
+        self.mission_plan = mission_plan
+        self.config       = SimulationConfig()
+
+        self._latest_sensors: Optional[SensorSuite] = None
+
+        self.vision = Vision(
+            image_provider=lambda: (self._latest_sensors.camera_image
+                                    if self._latest_sensors else None),
+            min_pole_pixels=self.MIN_PIXELS_FOR_DETECTION,
+            min_gate_pixels=int(p['min_gate_pixels'])
+        )
+
+        self.reset()
+
+    def reset(self):
+        self.current_task_index = 0
+        self.mission_failed = False
+        for task in self.mission_plan:
+            task.reset()
+
+        self.target_heading = 0.0
+        self.target_depth   = 0.0
+        self.target_roll    = 0.0
+        self.integral_z_err = 0.0
+
+        self._latest_sensors = None
+
+    def update(self, dt: float, sensors: SensorSuite) -> Tuple[ThrusterCommands, Vision]:
+
+        self._latest_sensors = sensors
+
+        if self.current_task_index >= len(self.mission_plan):
+            return ThrusterCommands(), self.vision
+
+        current_task = self.mission_plan[self.current_task_index]
+        self.target_depth = getattr(current_task, 'target_depth', self.target_depth)
+        self.vision.update()
+
+        # Update depth integrator
+        depth_error = self.target_depth - sensors.depth
+        self.integral_z_err = np.clip(
+            self.integral_z_err + depth_error * dt,
+            -self.integral_clamp_z,
+            self.integral_clamp_z
+        )
+
+        status, commands = current_task.execute(
+            self, dt, sensors, self.vision, self.config
+        )
+
+        if status == TaskStatus.COMPLETED:
+            if self.current_task_index >= len(self.mission_plan) - 1:
+                print("INFO: Final mission task completed.")
+                self.current_task_index += 1
+                return commands, self.vision
+            else:
+                self.current_task_index += 1
+                next_task = self.mission_plan[self.current_task_index]
+                next_depth = getattr(next_task, 'target_depth', self.target_depth)
+                # Only reset the depth integrator when the target depth changes
+                # meaningfully — carrying it over lets the sub hold depth
+                # immediately on the next task instead of drifting up while
+                # the integrator rebuilds from zero.
+                if abs(next_depth - self.target_depth) > 0.2:
+                    self.integral_z_err = 0.0
+                self.target_depth = next_depth
+
+                if hasattr(next_task, 'on_enter'):
+                    next_task.on_enter(self, sensors, self.vision,
+                                       next_task.context)
+                    if (hasattr(next_task, 'subtasks') and next_task.subtasks):
+                        if next_task.current_subtask_index < len(next_task.subtasks):
+                            next_task.subtasks[
+                                next_task.current_subtask_index
+                            ]._has_entered = True
+
+                return ThrusterCommands(), self.vision
+
+        elif status == TaskStatus.FAILED:
+            print(f"ERROR: Task {current_task.__class__.__name__} FAILED.")
+            self.mission_failed = True
+            self.current_task_index = len(self.mission_plan)
+            return self._get_damping_commands(sensors), self.vision
+
+        return commands, self.vision
+
+    # --- Status helpers ---
+
+    def get_current_task_name(self) -> str:
+        if self.current_task_index < len(self.mission_plan):
+            return self.mission_plan[self.current_task_index].__class__.__name__
+        return "MISSION_FAILED" if self.mission_failed else "MISSION_COMPLETE"
+
+    def get_current_state_name(self) -> str:
+        if self.current_task_index < len(self.mission_plan):
+            return self.mission_plan[self.current_task_index].state_name
+        return ""
+
+    # --- Control helpers ---
+
+    def get_depth_roll_commands(self,
+                                sensors: SensorSuite,
+                                target_depth: float,
+                                target_roll: float = 0.0
+                                ) -> Tuple[float, float]:
+        """
+        PID depth control + PD roll control.
+        Returns (heave_command, roll_command), each clipped to [-1, 1].
+        """
+        depth_error = target_depth - sensors.depth
+        heave = np.clip(
+            depth_error          * self.DEPTH_P_GAIN
+            + self.integral_z_err * self.DEPTH_I_GAIN
+            - sensors.velocity_z  * self.DEPTH_D_GAIN,
+            -1.0, 1.0
+        )
+
+        roll_error = angle_diff(target_roll, sensors.roll)
+        roll = np.clip(
+            roll_error            * self.ROLL_P_GAIN
+            - sensors.imu.gyro_x  * self.ROLL_D_GAIN,
+            -1.0, 1.0
+        )
+
+        return heave, roll
+
+    def _get_damping_commands(self, sensors: SensorSuite,
+                               target_depth: Optional[float] = None) -> ThrusterCommands:
+        """Damps all 6 axes of motion, holds current depth (or target_depth if given)."""
+        h_rad  = math.radians(sensors.heading)
+        cos_h, sin_h = math.cos(h_rad), math.sin(h_rad)
+
+        # World-frame damping → body frame
+        surge = (-sensors.velocity_x * cos_h
+                 - sensors.velocity_y * sin_h) * self.DAMPING_GAIN
+        sway  = ( sensors.velocity_x * sin_h
+                 - sensors.velocity_y * cos_h) * self.DAMPING_GAIN
+
+        yaw   = -sensors.imu.gyro_z * self.YAW_D_GAIN
+        depth_target = target_depth if target_depth is not None else sensors.depth
+        heave, roll = self.get_depth_roll_commands(sensors, depth_target)
+
+        return self._mix_and_normalize_commands(surge, sway, yaw, heave, roll,
+                                                actual_roll_deg=sensors.roll)
+
+    def get_spin_damping_commands(self,
+                                  sensors: SensorSuite,
+                                  target_depth: Optional[float] = None
+                                  ) -> ThrusterCommands:
+        """Damps everything except yaw while holding depth."""
+        target_depth = (target_depth if target_depth is not None
+                        else self.target_depth)
+
+        h_rad    = math.radians(sensors.heading)
+        cos_h, sin_h = math.cos(h_rad), math.sin(h_rad)
+
+        surge = (-sensors.velocity_x * cos_h
+                 - sensors.velocity_y * sin_h) * self.DAMPING_GAIN
+        sway  = ( sensors.velocity_x * sin_h
+                 - sensors.velocity_y * cos_h) * self.DAMPING_GAIN
+
+        heave, roll = self.get_depth_roll_commands(sensors, target_depth)
+
+        return self._mix_and_normalize_commands(surge, sway, 0.0, heave, roll,
+                                                actual_roll_deg=sensors.roll)
+
+    def get_heading_commands(self,
+                             sensors: SensorSuite,
+                             heading: float,
+                             surge_power: float = 0.0,
+                             sway_power: float = 0.0,
+                             target_depth: Optional[float] = None,
+                             target_roll: float = 0.0
+                             ) -> ThrusterCommands:
+        """Holds heading and depth, applies optional surge/sway power."""
+        target_depth = (target_depth if target_depth is not None
+                        else self.target_depth)
+
+        h_rad = math.radians(sensors.heading)
+        cos_h, sin_h = math.cos(h_rad), math.sin(h_rad)
+
+        yaw_err_deg = angle_diff(heading, sensors.heading)
+        yaw_err_rad = math.radians(yaw_err_deg)
+
+        yaw = float(np.clip(
+            yaw_err_rad * self.HOVER_YAW_P_GAIN - sensors.imu.gyro_z * self.YAW_D_GAIN,
+            -1.0, 1.0
+        ))
+
+        # Damp sway velocity while allowing commanded sway power
+        sway_vel = -sensors.velocity_x * sin_h + sensors.velocity_y * cos_h
+        sway = np.clip(
+            sway_power - sway_vel * self.MANEUVER_DAMPING_GAIN,
+            -1.0, 1.0
+        )
+
+        heave, roll = self.get_depth_roll_commands(sensors, target_depth,
+                                                   target_roll)
+        return self._mix_and_normalize_commands(surge_power, sway, yaw,
+                                                heave, roll,
+                                                actual_roll_deg=sensors.roll)
+
+    def get_go_to_visual_target_commands(self,
+                                         sensors: SensorSuite,
+                                         nav_target_x: float,
+                                         surge_power: float,
+                                         target_depth: Optional[float] = None
+                                         ) -> ThrusterCommands:
+        """
+        Holds depth, applies surge, steers yaw toward a visual target.
+
+        nav_target_x: pixel X coordinate of the target in the camera image.
+        """
+        target_depth = (target_depth if target_depth is not None
+                        else self.target_depth)
+
+        cam_h, cam_w = sensors.camera_image.shape[:2]
+        pixel_error_x = nav_target_x - cam_w / 2
+
+        yaw = float(np.clip(
+            -(pixel_error_x / (cam_w / 2)) * self.ALIGN_YAW_P_GAIN
+            - sensors.imu.gyro_z * self.YAW_D_GAIN,
+            -1.0, 1.0
+        ))
+
+        h_rad    = math.radians(sensors.heading)
+        sway_vel = (-sensors.velocity_x * math.sin(h_rad)
+                    + sensors.velocity_y * math.cos(h_rad))
+        sway     = np.clip(-sway_vel * self.MANEUVER_DAMPING_GAIN, -0.5, 0.5)
+
+        heave, roll = self.get_depth_roll_commands(sensors, target_depth)
+        return self._mix_and_normalize_commands(surge_power, sway, yaw,
+                                                heave, roll,
+                                                actual_roll_deg=sensors.roll)
+
+    def _mix_and_normalize_commands(self,
+                                    surge: float,
+                                    sway: float,
+                                    yaw: float,
+                                    heave: float,
+                                    roll: float,
+                                    actual_roll_deg: float = 0.0
+                                    ) -> ThrusterCommands:
+        """
+        Mixes 5-axis commands into 6 thruster commands and normalizes
+        so no thruster exceeds ±1.0.
+
+        `heave`/`sway` are the desired WORLD-frame values; applyPhysics
+        rotates body-frame (sway, heave) through the vehicle's ACTUAL roll
+        angle before adding them to world forces (a roll thruster pair
+        pushing "up" in body frame pushes increasingly sideways in world
+        frame as the sub tips over), so passing them straight through only
+        matches the caller's intent when level. Invert that rotation here
+        using actual_roll_deg (default 0 preserves old behavior for the rare
+        caller that doesn't track it): body_heave = W*cos(r), body_sway =
+        S + W*sin(r) reproduces world heave=W, sway=S at any roll angle.
+        Without this, even a harmless +/-2deg oscillation around level
+        combined with the steady heave needed to hold depth against
+        buoyancy leaks a small but constant, undamped world-frame sway force
+        -- confirmed in sim: Stabilize's velocity damper settled to a
+        nonzero ~0.065 m/s terminal drift (just above its own 0.05 m/s
+        completion threshold) and hung forever, pinned against a world
+        boundary. Also fixes the larger-scale version of the same leak
+        during a full barrel roll (StyleRollSubtask passes its integrated,
+        unwrapped angle here instead of the folded sensor channel).
+        """
+        cos_45 = 0.7071
+        s = surge * cos_45
+
+        r = math.radians(actual_roll_deg)
+        world_heave = float(np.clip(heave, -1.0, 1.0))
+        sway = float(np.clip(sway + world_heave * math.sin(r), -1.0, 1.0))
+        w = sway * cos_45
+
+        # Vertical: heave (depth authority) takes priority over roll torque.
+        # Both ride the same 2 thrusters (vp/vs); summing them and then
+        # normalizing symmetrically let a large, constant roll command (e.g.
+        # StyleRollSubtask's roll_power=0.9) permanently starve heave for the
+        # whole maneuver -- confirmed in sim: the sub surfaced to 0.00m for
+        # ~45s during a 720-degree roll. Give heave the full budget it needs
+        # first, then let roll use only what's left. Using body_heave (already
+        # cos(r)-scaled) rather than the raw world_heave also means roll gets
+        # MORE budget back as the roll angle grows toward 90 deg, instead of
+        # heave's 1/cos(r) amplification saturating and starving roll (the
+        # earlier version of this fix stalled a 720-degree roll around 80 deg).
+        heave_c = float(np.clip(world_heave * math.cos(r), -1.0, 1.0))
+        roll_budget = max(0.0, 1.0 - abs(heave_c))
+        roll_c = float(np.clip(roll, -roll_budget, roll_budget))
+
+        cmds = ThrusterCommands(
+            hfl =  s + w + yaw,
+            hfr =  s - w - yaw,
+            hal =  s - w + yaw,
+            har =  s + w - yaw,
+            vp  = heave_c + roll_c,   # port (left) — differential produces roll torque
+            vs  = heave_c - roll_c,   # starboard (right)
+        )
+
+        # Horizontal still needs normalizing; vertical is already in [-1, 1]
+        # by construction (heave_c and roll_c share a <=1.0 budget above).
+        h_max = max(1.0, abs(cmds.hfl), abs(cmds.hfr),
+                         abs(cmds.hal), abs(cmds.har))
+
+        if h_max > 1.0:
+            cmds.hfl /= h_max
+            cmds.hfr /= h_max
+            cmds.hal /= h_max
+            cmds.har /= h_max
+
+        return cmds

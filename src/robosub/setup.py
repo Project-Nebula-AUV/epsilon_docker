@@ -6,7 +6,7 @@ package_name = 'robosub'
 
 setup(
     name=package_name,
-    version='0.1.0',
+    version='0.2.0',
     packages=find_packages(exclude=['test']),
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -30,6 +30,7 @@ setup(
             'submarine_node = robosub.nodes.submarine_node:main',
             'recorder_node  = robosub.nodes.recorder_node:main',
             'web_node       = robosub.nodes.web_node:main',
+            'sim_gui_node   = robosub.nodes.sim_gui_node:main',
         ],
     },
 )

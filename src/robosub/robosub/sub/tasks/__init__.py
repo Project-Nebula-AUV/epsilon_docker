@@ -1,24 +1,19 @@
 #!/usr/bin/env python3
-"""
-Makes the tasks in this directory importable as a package.
-Imports base classes first to potentially resolve circular dependencies.
-"""
-# Import Base Classes FIRST
+"""Task package exports. Base classes first, then subtasks, then tasks."""
 from .subtask_base import Subtask, SubtaskStatus
-from robosub.sub.tasks.task_base import Task, TaskStatus
+from .task_base import Task, TaskStatus, MissionShared
 
-# Import Common Subtasks needed by other tasks
-# --- Removed DriveUntilTargetLostRight ---
 from .common_subtasks import (
-    DiveToDepth, SwayStraight, DriveUntilTargetLostForward, DynamicOrbitPole,
-    TurnToHeading, DriveStraight, Stabilize, DriveUntilTargetLost,
-    WaitForTargetVisible, AlignToObjectX,
-    ApproachAndCenterObject, SwayUntilTargetLost
+    CaptureReference, DiveToDepth, TurnToHeading, DriveStraight, SwayStraight,
+    Stabilize, AcquireTarget, WaitForTargetVisible, CenterOnGateHalf,
+    DriveThroughGate, StyleRollSubtask, DriveUntilTargetLost,
+    DriveUntilTargetLostForward, SwayUntilTargetLost, AlignToObjectX,
+    ApproachAndCenterObject, DynamicOrbitPole,
 )
-# ---
 
-# Import Specific Task Implementations LAST
 from .gate_task import GateTask
 from .stabilize_task import StabilizeTask
 from .orbit_turn_task import OrbitTurnTask
 from .shutdown_task import ShutdownTask
+from .slalom_task import SlalomTask
+from .sweep_task import SweepForSlalomTask

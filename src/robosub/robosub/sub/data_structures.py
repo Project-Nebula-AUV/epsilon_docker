@@ -19,7 +19,7 @@ from typing import List, Optional, Dict, Tuple, Callable
 import numpy as np
 
 from robosub.sub.vision import find_blobs_hsv
-from robosub.sub.config import GREEN_HSV_RANGE, RED_HSV_RANGES
+from robosub.sub.config import MARKER_HSV_RANGE, RED_HSV_RANGES
 
 
 @dataclass
@@ -81,10 +81,17 @@ class Vision:
         self.min_pole_pixels = min_pole_pixels
         self.min_gate_pixels = min_gate_pixels
 
-        self.green_blobs: List[Dict] = []
-        self.red_blobs:   List[Dict] = []
+        # marker_blobs: the course marker channel (WHITE on the 2026 course
+        # — slalom whites and the orbit marker; see config.MARKER_HSV_RANGE).
+        self.marker_blobs: List[Dict] = []
+        self.red_blobs:    List[Dict] = []
 
         self._clear_cache()
+
+    @property
+    def green_blobs(self) -> List[Dict]:
+        """Legacy alias for marker_blobs."""
+        return self.marker_blobs
 
     def _clear_cache(self):
         self._best_green_pole:       Optional[Dict]              = None
@@ -99,13 +106,13 @@ class Vision:
         """
         img = self.image_provider()
         if img is None:
-            self.green_blobs = []
-            self.red_blobs   = []
+            self.marker_blobs = []
+            self.red_blobs    = []
         else:
-            self.green_blobs = find_blobs_hsv(img, GREEN_HSV_RANGE,
-                                              self.min_pole_pixels)
-            self.red_blobs   = find_blobs_hsv(img, RED_HSV_RANGES,
-                                              self.min_gate_pixels)
+            self.marker_blobs = find_blobs_hsv(img, MARKER_HSV_RANGE,
+                                               self.min_pole_pixels)
+            self.red_blobs    = find_blobs_hsv(img, RED_HSV_RANGES,
+                                               self.min_gate_pixels)
         self._clear_cache()
 
     # --- Green pole (marker) ---
@@ -113,7 +120,7 @@ class Vision:
     def get_best_pole(self) -> Optional[Dict]:
         if not self._found_best_green_pole:
             self._found_best_green_pole = True
-            candidates = [b for b in self.green_blobs
+            candidates = [b for b in self.marker_blobs
                           if b['height'] > b['width'] * 1.2]
             self._best_green_pole = (max(candidates, key=lambda b: b['area'])
                                      if candidates else None)
@@ -146,7 +153,7 @@ class Vision:
         slalom white can coincidentally line up with a NEAR gate red's max_y
         (seen at 1.5 m mission depth) — the 4x height difference is what
         tells them apart."""
-        for w in self.green_blobs:
+        for w in self.marker_blobs:
             if w['height'] <= w['width'] * 1.2:
                 continue
             ratio = w['height'] / max(r['height'], 1)
@@ -170,10 +177,15 @@ class Vision:
                 best, min_diff = None, float('inf')
                 for i in range(len(candidates) - 1):
                     p1, p2 = candidates[i], candidates[i + 1]
-                    h_diff    = abs(p1['height'] - p2['height'])
+                    h_min = min(p1['height'], p2['height'])
+                    h_max = max(p1['height'], p2['height'])
                     y_overlap = (min(p1['max_y'], p2['max_y'])
                                  - max(p1['min_y'], p2['min_y']))
-                    if y_overlap > 10 and h_diff < 150:
+                    # Real gate posts sit at the same distance: similar
+                    # heights (ratio, not an absolute pixel diff) and
+                    # substantial vertical overlap.
+                    if (y_overlap > 0.5 * h_min and h_min > 0.55 * h_max):
+                        h_diff = h_max - h_min
                         if h_diff < min_diff:
                             min_diff = h_diff
                             best = (p1, p2)
@@ -189,8 +201,7 @@ class Vision:
                 if pair else None)
 
     # --- Slalom gatelets (one red pole + one white pole at similar height) ---
-    # White poles reuse the green_blobs channel: GREEN_HSV_RANGE is currently
-    # set to white in config.py ("TEMPORARILY WHITE for this course").
+    # White poles come from the marker channel (MARKER_HSV_RANGE = white).
 
     def get_slalom_gatelet(self, pass_side: Optional[str] = None
                            ) -> Optional[Tuple[Dict, Dict]]:
@@ -200,21 +211,36 @@ class Vision:
         the white pole on that side of the red pole. Returns (red, white).
         """
         reds = [b for b in self.red_blobs if b['height'] > b['width'] * 1.2]
-        whites = [b for b in self.green_blobs if b['height'] > b['width'] * 1.2]
+        whites = [b for b in self.marker_blobs if b['height'] > b['width'] * 1.2]
         best, best_y = None, -1.0
         for r in reds:
             for w in whites:
-                if abs(r['max_y'] - w['max_y']) > max(r['height'], w['height']) * 0.6:
+                # A genuine gatelet's red and white stand at the SAME
+                # distance: similar apparent heights, aligned bottoms, and a
+                # pixel separation set by the course geometry (1.524 m gap /
+                # ~1.3 m pole ≈ 1.2x the apparent height). Without the size
+                # and separation gates, a NEAR red pairs with a FAR white
+                # from the next triplet sitting pixel-adjacent to it — the
+                # "gap middle" then collapses onto the red pole (confirmed:
+                # the vehicle slalomed straight down the red pole line).
+                ratio = w['height'] / max(r['height'], 1)
+                if not (0.55 <= ratio <= 1.8):
+                    continue
+                if abs(r['max_y'] - w['max_y']) > max(r['height'], w['height']) * 0.5:
+                    continue
+                sep = abs(w['center_x'] - r['center_x'])
+                mean_h = (r['height'] + w['height']) / 2.0
+                if not (0.6 * mean_h <= sep <= 2.2 * mean_h):
                     continue
                 if pass_side == 'left' and w['center_x'] >= r['center_x']:
                     continue
                 if pass_side == 'right' and w['center_x'] <= r['center_x']:
                     continue
                 pair_y = max(r['max_y'], w['max_y'])
-                # prefer the closest pair; tie-break on white nearest the red
+                # prefer the closest gatelet; tie-break on white nearest red
                 if pair_y > best_y or (pair_y == best_y and best is not None
-                                       and abs(w['center_x'] - r['center_x'])
-                                       < abs(best[1]['center_x'] - best[0]['center_x'])):
+                                       and sep < abs(best[1]['center_x']
+                                                     - best[0]['center_x'])):
                     best, best_y = (r, w), pair_y
         return best
 

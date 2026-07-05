@@ -1,0 +1,20 @@
+services:
+  dev:
+    image: lunarzdev/epsilon-dev:rpi
+    build:
+      args:
+        TARGET_PLATFORM: rpi
+    environment:
+      DISPLAY: host.docker.internal:0
+    volumes: []
+    privileged: true
+    restart: unless-stopped
+    group_add:
+      - "986"   # gpio (host /dev/gpiochip* group)
+      - "988"   # i2c  (host /dev/i2c-* group)
+  sitl:
+    image: lunarzdev/epsilon-sitl:rpi
+    environment:
+      DISPLAY: host.docker.internal:0
+    volumes:
+      - ./boat.param:/param/boat.param:rw

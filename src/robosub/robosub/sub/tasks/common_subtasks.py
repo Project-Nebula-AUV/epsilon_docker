@@ -1,536 +1,763 @@
 #!/usr/bin/env python3
-"""
-Implementations of common, reusable Subtasks, using context.
-Subtasks now expect a Vision object and hold depth.
+"""Reusable mission subtasks.
+
+Design rules (see control.py for the law definitions):
+  * the compass owns heading, vision owns lateral position — no subtask
+    yaw-steers onto a biased pixel target;
+  * completion criteria only use signals the real vehicle can sense
+    (pixel error / pixel rate, gyro, fused depth and vertical velocity,
+    elapsed time) — never ground-truth lateral velocity;
+  * every subtask is bounded (TIMEOUT + ON_TIMEOUT policy, see
+    subtask_base.py).
+
+Gate geometry: with the heading locked square to the gate, the aim point for
+a committed side is the pixel midpoint between the gate center and the post
+on that side. Putting that point at the frame center with pure sway places
+the vehicle on the half-opening's axis. Image-right ('right' side) is the
+vehicle's starboard half when square to the gate.
 """
 import math
-from typing import Tuple, List, Optional, Dict, Any
+from typing import Dict, Any, Optional, Tuple
+
 import numpy as np
 
-# Absolute import for the base class
 from robosub.sub.tasks.subtask_base import Subtask, SubtaskStatus
-# --- Import Vision class ---
 from robosub.sub.data_structures import SensorSuite, Vision, ThrusterCommands
-# ---
 from robosub.sub.config import SimulationConfig
 from robosub.sub.utils import angle_diff
-# --- NO IMPORT from task_base here ---
 
-# --- DiveToDepth Subtask ---
-# ... (DiveToDepth code remains the same) ...
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+def _is_visible(vision: Vision, target_type: str) -> bool:
+    if target_type == 'gate':
+        return vision.is_gate_visible()
+    if target_type == 'pole':
+        return vision.is_pole_visible()
+    return vision.is_gate_visible() or vision.is_pole_visible()
+
+
+def _target_center_x(vision: Vision) -> Optional[float]:
+    if vision.is_gate_visible():
+        return vision.get_gate_center_x()
+    if vision.is_pole_visible():
+        return vision.get_pole_center_x()
+    return None
+
+
+def gate_half_center_px(pair: Tuple[Dict, Dict], side: str) -> float:
+    """Pixel x of the center of the chosen half-opening ('left'/'right' in
+    image space; pair is (left_post, right_post) sorted by center_x)."""
+    c_l, c_r = pair[0]['center_x'], pair[1]['center_x']
+    center = (c_l + c_r) / 2.0
+    return (center + c_r) / 2.0 if side == 'right' else (center + c_l) / 2.0
+
+
+def _err_norm(px: float, cam_w: int) -> float:
+    return (px - cam_w / 2.0) / (cam_w / 2.0)
+
+
+# ---------------------------------------------------------------------------
+# reference & basic motion
+# ---------------------------------------------------------------------------
+
+class CaptureReference(Subtask):
+    """Locks the course axis for this task into context['axis'].
+
+    The mission-wide reference (gate normal) is captured once, on the first
+    gate approach, from the vehicle's current heading — the vehicle starts
+    square to the gate. A reversed task uses the reciprocal axis.
+    """
+    TIMEOUT = 5.0
+    ON_TIMEOUT = 'complete'
+
+    def __init__(self, reverse: bool = False):
+        super().__init__()
+        self.reverse = reverse
+
+    def execute(self, sub, dt, sensors, vision, config, context):
+        if sub.shared.reference_heading is None:
+            sub.shared.reference_heading = sensors.heading
+            print(f"INFO: course reference locked at "
+                  f"{sub.shared.reference_heading:.1f} deg")
+        axis = sub.shared.reference_heading
+        if self.reverse:
+            axis = (axis + 180.0) % 360.0
+        context['axis'] = axis
+        return SubtaskStatus.COMPLETED, sub.ctrl.hold(
+            sensors, dt, context.get('target_depth', sensors.depth))
+
+
 class DiveToDepth(Subtask):
-    def __init__(self, depth_tolerance: float = 0.15, z_vel_tolerance: float = 0.05):
+    """Reach the task depth at held heading."""
+    TIMEOUT = 45.0
+    ON_TIMEOUT = 'fail'
+
+    def __init__(self, depth_tolerance: float = 0.12,
+                 z_vel_tolerance: float = 0.06):
+        super().__init__()
         self.depth_tolerance = depth_tolerance
         self.z_vel_tolerance = z_vel_tolerance
-        self.target_depth: float = 1.0
-        self.target_set = False
-    def on_enter(self, sub: 'Submarine', sensors: SensorSuite, vision_data: Vision, context: Dict[str, Any]):
+        self.target_depth = 1.0
+        self._heading: Optional[float] = None
+
+    def on_enter(self, sub, sensors, vision, context):
         self.target_depth = context.get('target_depth', sensors.depth)
-        self.target_set = True
-        print(f"INFO: DiveToDepth starting. Target: {self.target_depth:.2f}m")
-    def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite, vision_data: Vision, config: SimulationConfig, context: Dict[str, Any]) -> Tuple[SubtaskStatus, ThrusterCommands]:
-        if not self.target_set: self.on_enter(sub, sensors, vision_data, context)
-        depth_error = self.target_depth - sensors.depth
-        if (abs(depth_error) < self.depth_tolerance and abs(sensors.velocity_z) < self.z_vel_tolerance):
-            print("INFO: DiveToDepth complete."); return SubtaskStatus.COMPLETED, sub._get_damping_commands(sensors)
-        return SubtaskStatus.RUNNING, sub._get_damping_commands(sensors)
-    def get_dynamic_name(self, context: Dict[str, Any]) -> str: return f"{self.name}({self.target_depth:.1f}m)"
+        self._heading = context.get('axis', sensors.heading)
+        print(f"INFO: DiveToDepth -> {self.target_depth:.2f} m")
 
-# --- SwayStraight Subtask ---
-# ... (SwayStraight code remains the same) ...
-class SwayStraight(Subtask):
-    def __init__(self, duration: float, sway_power: float = 0.5):
-        self.duration = duration; self.sway_power = sway_power; self.timer = 0.0
-        self.heading_to_hold = None; self.target_depth: float = 0.1
-    def on_enter(self, sub: 'Submarine', sensors: SensorSuite, vision_data: Vision, context: Dict[str, Any]):
-        self.timer = self.duration; self.heading_to_hold = context.get('initial_heading', sensors.heading)
-        self.target_depth = context.get('target_depth', sensors.depth)
-        print(f"INFO: SwayStraight starting. Power: {self.sway_power}, Duration: {self.duration}")
-    def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite, vision_data: Vision, config: SimulationConfig, context: Dict[str, Any]) -> Tuple[SubtaskStatus, ThrusterCommands]:
-        if self.timer <= 0: return SubtaskStatus.COMPLETED, sub._get_damping_commands(sensors)
-        self.timer -= dt
-        if self.heading_to_hold is None: self.heading_to_hold = sensors.heading
-        commands = sub.get_heading_commands(sensors, self.heading_to_hold, surge_power=0.0, sway_power=self.sway_power, target_depth=self.target_depth)
-        return SubtaskStatus.RUNNING, commands
-    def get_dynamic_name(self, context: Dict[str, Any]) -> str: return f"{self.name}({self.sway_power:+.1f})"
+    def execute(self, sub, dt, sensors, vision, config, context):
+        cmds = sub.ctrl.hold(sensors, dt, self.target_depth, self._heading)
+        if (abs(self.target_depth - sensors.depth) < self.depth_tolerance
+                and abs(sensors.velocity_z) < self.z_vel_tolerance):
+            return SubtaskStatus.COMPLETED, cmds
+        return SubtaskStatus.RUNNING, cmds
 
-# --- DriveUntilTargetLostForward Subtask ---
-# ... (DriveUntilTargetLostForward code remains the same) ...
-class DriveUntilTargetLostForward(Subtask):
-    def __init__(self, surge_power: float = 0.4, target_type: str = 'pole'):
-        if target_type not in ['gate', 'pole', 'either']: raise ValueError("target_type must be 'gate', 'pole', or 'either'")
-        self.surge_power = surge_power; self.target_type = target_type
-        self.heading_to_hold: Optional[float] = None; self.target_was_visible = False; self.target_depth: float = 0.1
-    def on_enter(self, sub: 'Submarine', sensors: SensorSuite, vision: Vision, context: Dict[str, Any]):
-        self.heading_to_hold = context.get('initial_heading', sensors.heading)
-        self.target_depth = context.get('target_depth', sensors.depth)
-        if self.target_type == 'gate': self.target_was_visible = vision.is_gate_visible()
-        elif self.target_type == 'pole': self.target_was_visible = vision.is_pole_visible()
-        else: self.target_was_visible = vision.is_gate_visible() or vision.is_pole_visible()
-        if not self.target_was_visible: print(f"WARN: DriveUntilTargetLostForward starting but target '{self.target_type}' not visible!")
-        else: print(f"INFO: DriveUntilTargetLostForward starting. Target '{self.target_type}' visible.")
-    def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite, vision: Vision, config: SimulationConfig, context: Dict[str, Any]) -> Tuple[SubtaskStatus, ThrusterCommands]:
-        if self.heading_to_hold is None: self.heading_to_hold = sensors.heading
-        currently_visible = False
-        if self.target_type == 'gate': currently_visible = vision.is_gate_visible()
-        elif self.target_type == 'pole': currently_visible = vision.is_pole_visible()
-        else: currently_visible = vision.is_gate_visible() or vision.is_pole_visible()
-        if currently_visible:
-            self.target_was_visible = True
-            commands = sub.get_heading_commands(sensors, self.heading_to_hold, self.surge_power, target_depth=self.target_depth)
-            return SubtaskStatus.RUNNING, commands
-        else:
-            if self.target_was_visible:
-                print(f"INFO: DriveUntilTargetLostForward complete. Target '{self.target_type}' lost.")
-                context['initial_heading'] = sensors.heading; return SubtaskStatus.COMPLETED, sub._get_damping_commands(sensors)
-            else:
-                print(f"ERROR: DriveUntilTargetLostForward failed. Target '{self.target_type}' never visible.")
-                return SubtaskStatus.FAILED, sub._get_damping_commands(sensors)
-
-# --- MODIFIED DynamicOrbitPole Subtask ---
-class DynamicOrbitPole(Subtask):
-    """
-    Orbits the pole by applying constant sway and using yaw control
-    to keep the pole at a target X fraction. Uses PID surge control based
-    on apparent WIDTH to maintain distance.
-    Completes when the gate is visible AND the pole is >= 80% screen width.
-    """
-    def __init__(self,
-                 target_x_fraction: float = 0.5,
-                 sway_power: float = -0.3,
-                 yaw_gain: float = 1.5,
-                 # --- CHANGED to WIDTH ---
-                 target_pole_width_fraction: float = 0.12, # Target width as fraction of image width
-                 orbit_width_p_gain: float = 0.05, # P gain for width error -> surge (NEEDS TUNING)
-                 orbit_width_i_gain: float = 0.01, # I gain (NEEDS TUNING)
-                 orbit_width_d_gain: float = 0.05, # D gain (NEEDS TUNING)
-                 orbit_width_i_clamp: float = 0.3, # Max integral contribution
-                 # ---
-                 lost_timeout: float = 3.0,
-                 local_search_yaw: float = -0.2,
-                 min_orbit_time: float = 5.0):
-
-        self.target_x_fraction = target_x_fraction
-        self.sway_power = sway_power
-        self.yaw_gain = yaw_gain
-        self.min_orbit_time = min_orbit_time
-        # Width PID parameters
-        self.target_pole_width_fraction = target_pole_width_fraction
-        self.width_p_gain = orbit_width_p_gain
-        self.width_i_gain = orbit_width_i_gain
-        self.width_d_gain = orbit_width_d_gain
-        self.width_i_clamp = orbit_width_i_clamp
-        # ---
-        self.lost_timeout = lost_timeout
-        self.local_search_yaw = local_search_yaw
-        self.target_depth: float = 0.1
-        self.time_since_target_lost = 0.0
-        self.orbit_time = 0.0         # Time spent actively orbiting
-        self.integral_width_err = 0.0 # Width integral term
-        self.last_width_error = 0.0   # For D term calculation
-
-    def on_enter(self, sub: 'Submarine', sensors: SensorSuite, vision_data: Vision, context: Dict[str, Any]):
-        self.target_depth = context.get('target_depth', sensors.depth)
-        self.time_since_target_lost = 0.0
-        self.integral_width_err = 0.0 # Reset integral
-        self.last_width_error = 0.0
-        # Get initial width error
-        pole_blob = vision_data.get_best_pole()
-        if pole_blob:
-            current_width = pole_blob['width']
-            self.last_width_error = 0.0  # will be computed properly in execute()
-        else:
-            self.last_width_error = 0.0
-
-        self.orbit_time = 0.0
-        print(f"INFO: DynamicOrbitPole starting. Target X: {self.target_x_fraction*100:.0f}%, Sway: {self.sway_power}, Target Width: {self.target_pole_width_fraction*100:.1f}% of image, Min orbit time: {self.min_orbit_time:.1f}s")
-
-    def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite, vision_data: Vision, config: SimulationConfig, context: Dict[str, Any]) -> Tuple[SubtaskStatus, ThrusterCommands]:
-        pole_visible = vision_data.is_pole_visible()
-        pole_blob = vision_data.get_best_pole() # Get the full blob data
-        pole_center_x = pole_blob['center_x'] if pole_blob else None
-        current_width = pole_blob['width'] if pole_blob else 0.0
-        gate_visible = vision_data.is_gate_visible()
-
-        cam_w = sensors.camera_image.shape[1]
-        target_pole_x_px = cam_w * self.target_x_fraction
-        target_width_px = cam_w * self.target_pole_width_fraction
-
-        # --- Completion Check: Gate Visible AND Gate Right of Pole? ---
-        gate_right_of_pole = False
-        gate_center_x = vision_data.get_gate_center_x()
-        if gate_visible and pole_visible and gate_center_x is not None and pole_center_x is not None:
-            gate_right_of_pole = (gate_center_x > pole_center_x)
-
-        # Require minimum orbit time before completing to prevent immediate exit
-        if gate_visible and pole_visible and gate_right_of_pole and self.orbit_time < self.min_orbit_time:
-            gate_right_of_pole = False  # keep orbiting
-
-        # Require gate visibility AND it being right of the pole
-        if gate_visible and pole_visible and gate_right_of_pole:
-            print(f"INFO: DynamicOrbitPole found gate ({gate_visible}) right of pole ({gate_right_of_pole}). Completing.")
-            context['initial_heading'] = sensors.heading # Store heading
-            return SubtaskStatus.COMPLETED, sub._get_damping_commands(sensors)
-
-        if pole_visible and pole_center_x is not None:
-            # --- Pole is visible: Execute Orbit Control ---
-            self.time_since_target_lost = 0.0
-            self.orbit_time += dt
-
-            pixel_error_x = pole_center_x - target_pole_x_px
-            yaw_cmd = float(np.clip(
-                -(pixel_error_x / (cam_w / 2)) * self.yaw_gain - sensors.imu.gyro_z * sub.YAW_D_GAIN,
-                -1.0, 1.0
-            ))
-
-            sway_cmd = self.sway_power
-
-            # --- Surge PID Controller based on WIDTH ---
-            width_error = target_width_px - current_width
-            # Update integral term
-            self.integral_width_err += width_error * dt
-            self.integral_width_err = np.clip(self.integral_width_err, -self.width_i_clamp, self.width_i_clamp)
-            # Calculate derivative of error
-            error_rate = (width_error - self.last_width_error) / dt if dt > 0 else 0.0
-            self.last_width_error = width_error # Store for next iteration
-            # Calculate PID terms
-            surge_p = width_error * self.width_p_gain
-            surge_i = self.integral_width_err * self.width_i_gain
-            surge_d = error_rate * self.width_d_gain # D acts on rate of change of error
-            # Combine terms (Positive error = too far = positive surge)
-            surge_cmd = surge_p + surge_i + surge_d
-            surge_cmd = np.clip(surge_cmd, -0.5, 0.5)
-            # ---
-
-            # Hold Depth
-            heave_cmd, roll_cmd = sub.get_depth_roll_commands(sensors, self.target_depth, 0.0)
-
-            # Mix commands
-            commands = sub._mix_and_normalize_commands(surge_cmd, sway_cmd, yaw_cmd, heave_cmd, roll_cmd)
-            return SubtaskStatus.RUNNING, commands
-        else:
-            # --- Pole is LOST: Local Search or Fail ---
-            self.time_since_target_lost += dt
-            if self.time_since_target_lost > self.lost_timeout:
-                print(f"ERROR: DynamicOrbitPole failed - pole lost for > {self.lost_timeout}s")
-                return SubtaskStatus.FAILED, sub._get_damping_commands(sensors)
-            # Spin to search locally, stop surge/sway
-            yaw_cmd = self.local_search_yaw
-            sway_cmd = 0.0
-            surge_cmd = 0.0
-            self.integral_width_err = 0.0 # Reset integral
-            self.last_width_error = 0.0
-            # Hold Depth
-            heave_cmd, roll_cmd = sub.get_depth_roll_commands(sensors, self.target_depth, 0.0)
-            commands = sub._mix_and_normalize_commands(surge_cmd, sway_cmd, yaw_cmd, heave_cmd, roll_cmd)
-            return SubtaskStatus.RUNNING, commands
-
-    def get_dynamic_name(self, context: Dict[str, Any]) -> str:
-        search_indicator = f" Searching! ({self.time_since_target_lost:.1f}s)" if self.time_since_target_lost > 0 else ""
-        return f"{self.name}({self.target_x_fraction*100:.0f}%){search_indicator}"
-
-# --- SwayUntilTargetLost Subtask ---
-# ... (SwayUntilTargetLost code remains the same) ...
-class SwayUntilTargetLost(Subtask):
-    """
-    Sways straight (holding heading and depth) until the specified
-    vision target (default='pole') is lost.
-    """
-    def __init__(self, sway_power: float = -0.3, target_type: str = 'pole'):
-        if target_type not in ['gate', 'pole', 'either']:
-             raise ValueError("target_type must be 'gate', 'pole', or 'either'")
-        self.sway_power = sway_power # Negative = Left
-        self.target_type = target_type
-        self.heading_to_hold: Optional[float] = None
-        self.target_was_visible = False
-        self.target_depth: float = 0.1
-
-    def on_enter(self, sub: 'Submarine', sensors: SensorSuite,
-                 vision: Vision,
-                 context: Dict[str, Any]):
-        self.heading_to_hold = context.get('initial_heading', sensors.heading)
-        self.target_depth = context.get('target_depth', sensors.depth)
-        if self.target_type == 'gate':
-             self.target_was_visible = vision.is_gate_visible()
-        elif self.target_type == 'pole':
-             self.target_was_visible = vision.is_pole_visible()
-        else: # either
-             self.target_was_visible = vision.is_gate_visible() or vision.is_pole_visible()
-        if not self.target_was_visible:
-            print(f"WARN: SwayUntilTargetLost starting but target '{self.target_type}' not visible!")
-        else:
-            print(f"INFO: SwayUntilTargetLost starting. Target '{self.target_type}' visible. Sway Power: {self.sway_power}")
-
-    def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite,
-                vision: Vision,
-                config: SimulationConfig, context: Dict[str, Any]) -> Tuple[SubtaskStatus, ThrusterCommands]:
-        if self.heading_to_hold is None:
-             print("WARN: SwayUntilTargetLost heading_to_hold is None, using current.")
-             self.heading_to_hold = sensors.heading
-        currently_visible = False
-        if self.target_type == 'gate':
-             currently_visible = vision.is_gate_visible()
-        elif self.target_type == 'pole':
-             currently_visible = vision.is_pole_visible()
-        else: # either
-             currently_visible = vision.is_gate_visible() or vision.is_pole_visible()
-        if currently_visible:
-            self.target_was_visible = True
-            commands = sub.get_heading_commands(sensors, self.heading_to_hold,
-                                                surge_power=0.0,
-                                                sway_power=self.sway_power,
-                                                target_depth=self.target_depth)
-            return SubtaskStatus.RUNNING, commands
-        else:
-            print(f"INFO: SwayUntilTargetLost complete. Target '{self.target_type}' lost.")
-            context['initial_heading'] = sensors.heading
-            return SubtaskStatus.COMPLETED, sub._get_damping_commands(sensors)
-
-    def get_dynamic_name(self, context: Dict[str, Any]) -> str:
-        return f"{self.name}({self.sway_power:+.1f})"
+    def get_dynamic_name(self, context):
+        return f"{self.name}({self.target_depth:.1f}m)"
 
 
-# --- Navigation Subtasks ---
-# ... (TurnToHeading, DriveStraight, Stabilize remain the same) ...
 class TurnToHeading(Subtask):
-    def __init__(self, absolute_degrees: Optional[float] = None, relative_degrees: Optional[float] = None, tolerance_degrees: float = 5.0):
-        if absolute_degrees is not None and relative_degrees is not None: raise ValueError("Provide either absolute_degrees or relative_degrees, not both.")
-        if absolute_degrees is None and relative_degrees is None: raise ValueError("Must provide either absolute_degrees or relative_degrees.")
-        self.absolute_degrees=absolute_degrees; self.relative_degrees=relative_degrees; self.tolerance=tolerance_degrees
-        self.target_heading: Optional[float] = None
-        self.target_depth: float = 0.1
-    def on_enter(self, sub: 'Submarine', sensors: SensorSuite, vision_data: Vision, context: Dict[str, Any]):
-        if self.absolute_degrees is not None: self.target_heading = self.absolute_degrees % 360
-        elif self.relative_degrees is not None:
-            initial_heading = context.get('initial_heading', sensors.heading); self.target_heading = (initial_heading + self.relative_degrees) % 360
-        else: self.target_heading = None
+    """Compass turn. Target from absolute degrees, relative-to-entry degrees,
+    or the task axis (use_axis=True)."""
+    TIMEOUT = 35.0
+    ON_TIMEOUT = 'fail'
+
+    def __init__(self, absolute_degrees: Optional[float] = None,
+                 relative_degrees: Optional[float] = None,
+                 use_axis: bool = False,
+                 tolerance_degrees: float = 2.5,
+                 rate_tolerance: float = 0.05):
+        super().__init__()
+        if not use_axis and absolute_degrees is None and relative_degrees is None:
+            raise ValueError("need absolute_degrees, relative_degrees or use_axis")
+        self.absolute = absolute_degrees
+        self.relative = relative_degrees
+        self.use_axis = use_axis
+        self.tol = tolerance_degrees
+        self.rate_tol = rate_tolerance
+        self.target: Optional[float] = None
+        self.target_depth = 1.0
+
+    def on_enter(self, sub, sensors, vision, context):
         self.target_depth = context.get('target_depth', sensors.depth)
-    def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite, vision_data: Vision, config: SimulationConfig, context: Dict[str, Any]) -> Tuple[SubtaskStatus, ThrusterCommands]:
-        if self.target_heading is None: print("ERROR: TurnToHeading target could not be determined!"); return SubtaskStatus.FAILED, sub._get_damping_commands(sensors)
-        heading_error = angle_diff(self.target_heading, sensors.heading)
-        if abs(heading_error) < self.tolerance: return SubtaskStatus.COMPLETED, sub._get_damping_commands(sensors)
-        commands = sub.get_heading_commands(sensors, self.target_heading, surge_power=0.0, target_depth=self.target_depth)
-        return SubtaskStatus.RUNNING, commands
-    def get_dynamic_name(self, context: Dict[str, Any]) -> str:
-        if self.target_heading is not None: return f"{self.name}({self.target_heading:.0f}°)"
-        elif self.absolute_degrees is not None: return f"{self.name}(Abs {self.absolute_degrees:.0f}°)"
-        elif self.relative_degrees is not None: rel = self.relative_degrees; init = context.get('initial_heading', '?'); calc_target = f" -> {(init + rel) % 360:.0f}" if init != '?' else ""; return f"{self.name}(Rel {rel:.0f}° from {init}°{calc_target})"
-        return self.name
+        if self.use_axis:
+            self.target = context.get('axis', sensors.heading)
+        elif self.absolute is not None:
+            self.target = self.absolute % 360.0
+        else:
+            self.target = (sensors.heading + self.relative) % 360.0
+
+    def execute(self, sub, dt, sensors, vision, config, context):
+        cmds = sub.ctrl.hold(sensors, dt, self.target_depth, self.target)
+        if (abs(angle_diff(self.target, sensors.heading)) < self.tol
+                and abs(sensors.imu.gyro_z) < self.rate_tol):
+            return SubtaskStatus.COMPLETED, cmds
+        return SubtaskStatus.RUNNING, cmds
+
+    def get_dynamic_name(self, context):
+        t = f"{self.target:.0f}" if self.target is not None else "?"
+        return f"{self.name}({t} deg)"
+
 
 class DriveStraight(Subtask):
+    """Timed surge on held heading."""
+    ON_TIMEOUT = 'complete'
+
     def __init__(self, duration: float, surge_power: float = 0.5):
-        self.duration=duration; self.surge_power=surge_power; self.timer=0.0
-        self.heading_to_hold=None; self.target_depth: float = 0.1
-    def on_enter(self, sub: 'Submarine', sensors: SensorSuite, vision_data: Vision, context: Dict[str, Any]):
-        self.timer = self.duration; self.heading_to_hold = context.get('initial_heading', sensors.heading)
+        super().__init__()
+        self.duration = duration
+        self.surge = surge_power
+        self.TIMEOUT = duration + 10.0
+        self.target_depth = 1.0
+        self._heading: Optional[float] = None
+
+    def on_enter(self, sub, sensors, vision, context):
         self.target_depth = context.get('target_depth', sensors.depth)
-    def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite, vision_data: Vision, config: SimulationConfig, context: Dict[str, Any]) -> Tuple[SubtaskStatus, ThrusterCommands]:
-        if self.timer <= 0: return SubtaskStatus.COMPLETED, sub._get_damping_commands(sensors)
-        self.timer -= dt
-        if self.heading_to_hold is None: self.heading_to_hold = sensors.heading
-        commands = sub.get_heading_commands(sensors, self.heading_to_hold, self.surge_power, target_depth=self.target_depth)
-        return SubtaskStatus.RUNNING, commands
+        self._heading = context.get('axis', sensors.heading)
+
+    def execute(self, sub, dt, sensors, vision, config, context):
+        cmds = sub.ctrl.hold(sensors, dt, self.target_depth, self._heading,
+                             surge=self.surge)
+        if self._elapsed >= self.duration:
+            return SubtaskStatus.COMPLETED, cmds
+        return SubtaskStatus.RUNNING, cmds
+
+
+class SwayStraight(Subtask):
+    """Timed open-loop sway on held heading."""
+    ON_TIMEOUT = 'complete'
+
+    def __init__(self, duration: float, sway_power: float = 0.5):
+        super().__init__()
+        self.duration = duration
+        self.sway = sway_power
+        self.TIMEOUT = duration + 10.0
+        self.target_depth = 1.0
+        self._heading: Optional[float] = None
+
+    def on_enter(self, sub, sensors, vision, context):
+        self.target_depth = context.get('target_depth', sensors.depth)
+        self._heading = context.get('axis', sensors.heading)
+
+    def execute(self, sub, dt, sensors, vision, config, context):
+        cmds = sub.ctrl.hold(sensors, dt, self.target_depth, self._heading,
+                             sway=self.sway)
+        if self._elapsed >= self.duration:
+            return SubtaskStatus.COMPLETED, cmds
+        return SubtaskStatus.RUNNING, cmds
+
+    def get_dynamic_name(self, context):
+        return f"{self.name}({self.sway:+.1f})"
+
 
 class Stabilize(Subtask):
-    def __init__(self, duration: float = 2.0, speed_threshold: float = 0.05):
-        self.duration=duration; self.speed_threshold=speed_threshold; self.timer=0.0
-        self.target_set=False; self.target_depth: float = 0.1
-    def on_enter(self, sub: 'Submarine', sensors: SensorSuite, vision_data: Vision, context: Dict[str, Any]):
-        self.timer=0.0; self.target_set=False; self.target_depth = context.get('target_depth', sensors.depth)
-        self.target_set = True
-    def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite, vision_data: Vision, config: SimulationConfig, context: Dict[str, Any]) -> Tuple[SubtaskStatus, ThrusterCommands]:
-        if not self.target_set: self.on_enter(sub, sensors, vision_data, context)
-        self.timer += dt
-        speed_xy = math.hypot(sensors.velocity_x, sensors.velocity_y); speed_z = abs(sensors.velocity_z)
-        if self.timer > self.duration and speed_xy < self.speed_threshold and speed_z < self.speed_threshold: return SubtaskStatus.COMPLETED, sub._get_damping_commands(sensors)
-        return SubtaskStatus.RUNNING, sub._get_damping_commands(sensors)
+    """Quiet down at the task depth and held heading. Completes after
+    `duration` once rotation rates, roll, depth error and vertical speed are
+    all small (the honest stability criteria — no ground-truth velocity)."""
+    ON_TIMEOUT = 'complete'
 
-# --- Vision-Based Subtasks ---
+    def __init__(self, duration: float = 2.0, **_legacy):
+        super().__init__()
+        self.duration = duration
+        self.TIMEOUT = duration + 20.0
+        self.target_depth = 1.0
+        self._heading: Optional[float] = None
 
-class DriveUntilTargetLost(Subtask):
-    def __init__(self, surge_power: float = 0.5, target_type: str = 'gate'):
-        if target_type not in ['gate', 'pole', 'either']: raise ValueError("target_type must be 'gate', 'pole', or 'either'")
-        self.surge_power = surge_power; self.target_type = target_type
-        self.heading_to_hold: Optional[float] = None; self.target_was_visible = False; self.target_depth: float = 0.1
-    def on_enter(self, sub: 'Submarine', sensors: SensorSuite, vision: Vision, context: Dict[str, Any]):
-        self.heading_to_hold = context.get('initial_heading', sensors.heading)
+    def on_enter(self, sub, sensors, vision, context):
         self.target_depth = context.get('target_depth', sensors.depth)
-        if self.target_type == 'gate': self.target_was_visible = vision.is_gate_visible()
-        elif self.target_type == 'pole': self.target_was_visible = vision.is_pole_visible()
-        else: self.target_was_visible = vision.is_gate_visible() or vision.is_pole_visible()
-    def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite, vision: Vision, config: SimulationConfig, context: Dict[str, Any]) -> Tuple[SubtaskStatus, ThrusterCommands]:
-        if self.heading_to_hold is None: self.heading_to_hold = sensors.heading
-        currently_visible = False
-        if self.target_type == 'gate': currently_visible = vision.is_gate_visible()
-        elif self.target_type == 'pole': currently_visible = vision.is_pole_visible()
-        else: currently_visible = vision.is_gate_visible() or vision.is_pole_visible()
-        if currently_visible:
-            self.target_was_visible = True
-            commands = sub.get_heading_commands(sensors, self.heading_to_hold, self.surge_power, target_depth=self.target_depth)
-            return SubtaskStatus.RUNNING, commands
+        self._heading = context.get('axis', sensors.heading)
+
+    def execute(self, sub, dt, sensors, vision, config, context):
+        cmds = sub.ctrl.hold(sensors, dt, self.target_depth, self._heading)
+        if (self._elapsed >= self.duration
+                and sub.ctrl.is_settled(sensors, self.target_depth)):
+            return SubtaskStatus.COMPLETED, cmds
+        return SubtaskStatus.RUNNING, cmds
+
+
+# ---------------------------------------------------------------------------
+# search & acquisition
+# ---------------------------------------------------------------------------
+
+class AcquireTarget(Subtask):
+    """Find the target: hold station and yaw-scan while it is not visible,
+    brake and debounce once it is. Scan direction follows the task's
+    search_direction."""
+    ON_TIMEOUT = 'fail'
+    SCAN_RATE = 0.35        # rad/s
+    DEBOUNCE_TICKS = 5
+
+    def __init__(self, target_type: str = 'either', timeout: float = 120.0):
+        super().__init__()
+        self.target_type = target_type.lower()
+        self.TIMEOUT = timeout
+        self.target_depth = 1.0
+        self._seen = 0
+
+    def on_enter(self, sub, sensors, vision, context):
+        self.target_depth = context.get('target_depth', sensors.depth)
+        self._seen = 0
+
+    def execute(self, sub, dt, sensors, vision, config, context):
+        if _is_visible(vision, self.target_type):
+            self._seen += 1
+            cmds = sub.ctrl.hold(sensors, dt, self.target_depth)
+            if self._seen >= self.DEBOUNCE_TICKS:
+                return SubtaskStatus.COMPLETED, cmds
+            return SubtaskStatus.RUNNING, cmds
+        self._seen = 0
+        rate = -self.SCAN_RATE * context.get('search_direction', 1)
+        return SubtaskStatus.RUNNING, sub.ctrl.scan(sensors, dt,
+                                                    self.target_depth, rate)
+
+    def get_dynamic_name(self, context):
+        return f"{self.name}({self.target_type} {self._elapsed:.0f}s)"
+
+
+# Name kept for compatibility with older mission/task code.
+WaitForTargetVisible = AcquireTarget
+
+
+# ---------------------------------------------------------------------------
+# gate leg
+# ---------------------------------------------------------------------------
+
+class CenterOnGateHalf(Subtask):
+    """Place the chosen half-opening's center at the frame center using pure
+    sway with the compass holding the task axis. Completes when the pixel
+    error has stayed inside tolerance with a quiet pixel rate.
+
+    rate_tol bounds the RESIDUAL LATERAL VELOCITY at completion (pixel-rate
+    is the only lateral-velocity signal the vehicle has) — the pre-roll
+    instance uses a tight value so the style roll starts as close to rest as
+    physically knowable.
+
+    Range hold: the pair's pixel separation is a range signal; gentle surge
+    keeps it near the ~3 m standoff value, so residual closing velocity from
+    the previous task can never shrink the FOV until a post falls out of
+    frame (that was the return-gate failure mode).
+
+    Blind fallback: sway toward wherever a post is CURRENTLY visible; a
+    remembered direction is only trusted briefly (a stale latched sign once
+    drove a 40 s runaway into the pool wall), after which the vehicle holds
+    station and lets the timeout valve fire.
+    """
+    ON_TIMEOUT = 'complete'   # valve: never strand the mission on centering
+    BLIND_SWAY = 0.25
+    SIGN_MEMORY_S = 1.5       # how long the last seen direction stays valid
+    SEP_TARGET = 0.95         # pair separation / half-width at ~3 m standoff
+    SEP_BAND = 0.18           # completion requires range inside this band
+    RANGE_GAIN = 0.4
+    TALL_POST_FRAC = 0.4      # single post taller than this frac of frame
+                              # height = we are too close (blind regime)
+
+    def __init__(self, side: str = 'right', tolerance_px: float = 6.0,
+                 hold_ticks: int = 12, rate_tol: float = 0.04,
+                 timeout: float = 40.0):
+        super().__init__()
+        self.side = side
+        self.tol_px = tolerance_px
+        self.hold_ticks = hold_ticks
+        self.rate_tol = rate_tol
+        self.TIMEOUT = timeout
+        self.target_depth = 1.0
+        self._axis: Optional[float] = None
+        self._ok = 0
+        self._blind = 0.0
+        self._sign_age = 1e9
+        self._last_err_sign = 0.0
+
+    def on_enter(self, sub, sensors, vision, context):
+        self.target_depth = context.get('target_depth', sensors.depth)
+        self._axis = context.get('axis', sensors.heading)
+        self._ok = 0
+        self._blind = 0.0
+        self._sign_age = 1e9
+        self._last_err_sign = 0.0
+        self._sep_prev = None
+        self._sep_rate = 0.0
+        sub.ctrl.reset_pixel_servo()
+
+    def execute(self, sub, dt, sensors, vision, config, context):
+        pair = vision.get_gate_pair()
+        cam_w = sensors.camera_image.shape[1]
+        cam_h = sensors.camera_image.shape[0]
+        self._sign_age += dt
+        if pair is None:
+            self._blind += dt
+            self._ok = 0
+            if vision.red_blobs:
+                # A single visible post is ambiguous — resolve by RANGE
+                # (its apparent height). TALL post: we are too close, the
+                # opening fell off the frame edge — back away and sway away
+                # from the post. SHORT post: we are at standoff but far off
+                # axis, the whole gate sits to one side — sway TOWARD it.
+                # (One sign for both regimes ran the vehicle diagonally
+                # into the pool corner.)
+                blob = max(vision.red_blobs, key=lambda b: b['area'])
+                sign = 1.0 if blob['center_x'] > cam_w / 2 else -1.0
+                if blob['height'] > self.TALL_POST_FRAC * cam_h:
+                    return SubtaskStatus.RUNNING, sub.ctrl.hold(
+                        sensors, dt, self.target_depth, self._axis,
+                        surge=-0.25, sway=sign * self.BLIND_SWAY)
+                return SubtaskStatus.RUNNING, sub.ctrl.hold(
+                    sensors, dt, self.target_depth, self._axis,
+                    sway=-sign * self.BLIND_SWAY)
+            if self._sign_age < self.SIGN_MEMORY_S and self._last_err_sign:
+                # Pair just dropped out: chase the last pixel error briefly.
+                return SubtaskStatus.RUNNING, sub.ctrl.hold(
+                    sensors, dt, self.target_depth, self._axis,
+                    sway=-self._last_err_sign * self.BLIND_SWAY)
+            if self._blind > 1.0:
+                print(f"WARN: CenterOnGateHalf blind {self._blind:.1f}s "
+                      f"(no bearing — backing up)")
+            # Nothing visible at all: back straight up on the axis — range
+            # is the only lever that ever brings the gate back into view.
+            return SubtaskStatus.RUNNING, sub.ctrl.hold(
+                sensors, dt, self.target_depth, self._axis, surge=-0.2)
+        self._blind = 0.0
+        err = _err_norm(gate_half_center_px(pair, self.side), cam_w)
+        if abs(err) > 0.02:
+            self._last_err_sign = math.copysign(1.0, err)
+            self._sign_age = 0.0
+        sep = abs(pair[1]['center_x'] - pair[0]['center_x']) / (cam_w / 2.0)
+        if self._sep_prev is not None and dt > 0:
+            self._sep_rate += 0.3 * ((sep - self._sep_prev) / dt
+                                     - self._sep_rate)
+        self._sep_prev = sep
+        surge = float(np.clip((self.SEP_TARGET - sep) * self.RANGE_GAIN,
+                              -0.2, 0.15))
+        cmds = sub.ctrl.track_pixel_sway(sensors, dt, self.target_depth,
+                                         err, self._axis, surge=surge)
+        tol = self.tol_px / (cam_w / 2.0)
+        # Complete only truly settled on ALL knowable axes: pixel error and
+        # rate (lateral), range inside the standoff band and range-rate
+        # quiet (longitudinal) — a completion while the range-hold was still
+        # surging once sent a roll segment off with forward velocity.
+        if (abs(err) < tol and abs(sub.ctrl.pixel_rate()) < self.rate_tol
+                and abs(sep - self.SEP_TARGET) < self.SEP_BAND
+                and abs(self._sep_rate) < 0.05):
+            self._ok += 1
+            if self._ok >= self.hold_ticks:
+                return SubtaskStatus.COMPLETED, cmds
         else:
-            if self.target_was_visible: return SubtaskStatus.COMPLETED, sub._get_damping_commands(sensors)
-            else: return SubtaskStatus.FAILED, sub._get_damping_commands(sensors)
+            self._ok = 0
+        return SubtaskStatus.RUNNING, cmds
 
-class WaitForTargetVisible(Subtask):
-    # timeout -> FAILED: aborts the task (mission ends, thrusters go idle, the
-    # positively-buoyant sub surfaces). Without it a persistently-suppressed
-    # target (e.g. a vision false-classification) means hovering/spinning
-    # until the battery dies. Timer resets on (re-)entry.
-    def __init__(self, target_type='either', timeout: float = 120.0):
-        self.target_type = target_type.lower(); self.target_depth: float = 0.1
-        self.timeout = timeout; self.timer = 0.0
-    def on_enter(self, sub: 'Submarine', sensors: SensorSuite, vision_data: Vision, context: Dict[str, Any]):
+    def get_dynamic_name(self, context):
+        return f"{self.name}({self.side} ok:{self._ok})"
+
+
+class DriveThroughGate(Subtask):
+    """Drive the committed half-opening: surge with the sway servo trimming
+    onto the half-center while both posts are visible; once the gate leaves
+    the field of view (close-in), hold the axis and surge a fixed clearance
+    time to carry the vehicle through and out the far side."""
+    ON_TIMEOUT = 'complete'
+
+    def __init__(self, side: str = 'right', surge_power: float = 0.55,
+                 clear_secs: float = 4.0, timeout: float = 45.0):
+        super().__init__()
+        self.side = side
+        self.surge = surge_power
+        self.clear_secs = clear_secs
+        self.TIMEOUT = timeout
+        self.target_depth = 1.0
+        self._axis: Optional[float] = None
+        self._seen = False
+        self._lost_t: Optional[float] = None
+
+    def on_enter(self, sub, sensors, vision, context):
         self.target_depth = context.get('target_depth', sensors.depth)
-        self.timer = 0.0
-    def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite, vision_data: Vision, config: SimulationConfig, context: Dict[str, Any]) -> Tuple[SubtaskStatus, ThrusterCommands]:
-        self.timer += dt
-        visible = False
-        if self.target_type == 'pole': visible = vision_data.is_pole_visible()
-        elif self.target_type == 'gate': visible = vision_data.is_gate_visible()
-        else: visible = vision_data.is_pole_visible() or vision_data.is_gate_visible()
-        if visible: return SubtaskStatus.COMPLETED, sub.get_spin_damping_commands(sensors, self.target_depth)
-        if self.timer > self.timeout:
-            print(f"ERROR: WaitForTargetVisible('{self.target_type}') timed out after {self.timeout:.0f}s")
-            return SubtaskStatus.FAILED, sub._get_damping_commands(sensors)
-        heave, roll = sub.get_depth_roll_commands(sensors, self.target_depth, 0.0); return SubtaskStatus.RUNNING, sub._mix_and_normalize_commands(0, 0, 0, heave, roll)
-    def get_dynamic_name(self, context: Dict[str, Any]) -> str:
-        return f"{self.name}({self.target_type} {self.timer:.0f}/{self.timeout:.0f}s)"
+        self._axis = context.get('axis', sensors.heading)
+        self._seen = False
+        self._lost_t = None
+        sub.ctrl.reset_pixel_servo()
 
-class AlignToObjectX(Subtask):
-    def __init__(self, target_x_fraction: float, tolerance_px: int = 15, yaw_gain: float = 0.8, yaw_rate_tolerance: float = 0.05):
-        self.target_x_fraction=target_x_fraction; self.tolerance_px=tolerance_px; self.yaw_gain=yaw_gain; self.yaw_rate_tolerance=yaw_rate_tolerance
-        self.target_depth: float = 0.1
-    def on_enter(self, sub: 'Submarine', sensors: SensorSuite, vision_data: Vision, context: Dict[str, Any]):
-        self.target_depth = context.get('target_depth', sensors.depth)
-    def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite, vision_data: Vision, config: SimulationConfig, context: Dict[str, Any]) -> Tuple[SubtaskStatus, ThrusterCommands]:
-        current_center_x = None
-        if vision_data.is_gate_visible(): current_center_x = vision_data.get_gate_center_x()
-        elif vision_data.is_pole_visible(): current_center_x = vision_data.get_pole_center_x()
-        if current_center_x is None: return SubtaskStatus.RUNNING, sub.get_spin_damping_commands(sensors, self.target_depth)
-        cam_w = sensors.camera_image.shape[1]; target_pixel_x = cam_w * self.target_x_fraction
-        pixel_error_x = current_center_x - target_pixel_x
-        yaw = float(np.clip(
-            -(pixel_error_x / (cam_w / 2)) * self.yaw_gain - sensors.imu.gyro_z * sub.YAW_D_GAIN,
-            -1.0, 1.0
-        ))
-        is_centered = abs(pixel_error_x) < self.tolerance_px; is_stable = abs(sensors.imu.gyro_z) < self.yaw_rate_tolerance
-        if is_centered and is_stable: context['initial_heading'] = sensors.heading; return SubtaskStatus.COMPLETED, sub._get_damping_commands(sensors)
-        heave, roll = sub.get_depth_roll_commands(sensors, self.target_depth, 0.0)
-        return SubtaskStatus.RUNNING, sub._mix_and_normalize_commands(0.0, 0.0, yaw, heave, roll)
-    def on_exit(self, sub: 'Submarine', sensors: SensorSuite, vision_data: Vision, context: Dict[str, Any]): context['initial_heading'] = sensors.heading
+    def execute(self, sub, dt, sensors, vision, config, context):
+        pair = vision.get_gate_pair()
+        if pair is not None:
+            self._seen = True
+            self._lost_t = None
+            cam_w = sensors.camera_image.shape[1]
+            err = _err_norm(gate_half_center_px(pair, self.side), cam_w)
+            return SubtaskStatus.RUNNING, sub.ctrl.track_pixel_sway(
+                sensors, dt, self.target_depth, err, self._axis,
+                surge=self.surge)
 
-class ApproachAndCenterObject(Subtask):
-    def __init__(self, height_threshold_px: int, target_x_fraction: float = 0.5, surge_p_gain: float = 0.1, height_tolerance_px: int = 5, yaw_gain: float = 1.5, align_tolerance_px: int = 15, lost_timeout: float = 2.0):
-        self.height_threshold = height_threshold_px; self.target_x_fraction = target_x_fraction
-        self.surge_p_gain = surge_p_gain; self.height_tolerance = height_tolerance_px
-        self.yaw_gain = yaw_gain; self.align_tolerance_px = align_tolerance_px
-        self.lost_timeout = lost_timeout; self.time_since_target_lost = 0.0; self.target_depth: float = 0.1
-    def on_enter(self, sub: 'Submarine', sensors: SensorSuite, vision_data: Vision, context: Dict[str, Any]):
-        self.time_since_target_lost = 0.0; self.target_depth = context.get('target_depth', sensors.depth)
-        print(f"INFO: Approach starting. Target Height: {self.height_threshold}px, Target X: {self.target_x_fraction*100:.0f}%")
-    def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite, vision_data: Vision, config: SimulationConfig, context: Dict[str, Any]) -> Tuple[SubtaskStatus, ThrusterCommands]:
-        target_height = vision_data.get_pole_apparent_height(); target_center_x = vision_data.get_pole_center_x(); is_visible = vision_data.is_pole_visible()
-        if is_visible and target_center_x is not None:
-            self.time_since_target_lost = 0.0
-            height_error = self.height_threshold - target_height; surge = height_error * self.surge_p_gain; surge = np.clip(surge, -0.4, 0.5)
-            cam_w = sensors.camera_image.shape[1]; target_pixel_x = cam_w * self.target_x_fraction
-            pixel_error_x = target_center_x - target_pixel_x
-            yaw = float(np.clip(
-                -(pixel_error_x / (cam_w / 2)) * self.yaw_gain - sensors.imu.gyro_z * sub.YAW_D_GAIN,
-                -1.0, 1.0
-            ))
-            heave, roll = sub.get_depth_roll_commands(sensors, self.target_depth, 0.0)
-            is_at_dist = abs(height_error) < self.height_tolerance; is_aligned = abs(pixel_error_x) < self.align_tolerance_px
-            if is_at_dist and is_aligned: print("INFO: Approach complete."); context['initial_heading'] = sensors.heading; return SubtaskStatus.COMPLETED, sub._get_damping_commands(sensors)
-            return SubtaskStatus.RUNNING, sub._mix_and_normalize_commands(surge, 0.0, yaw, heave, roll)
-        else:
-            self.time_since_target_lost += dt
-            if self.time_since_target_lost > self.lost_timeout: print(f"ERROR: Approach failed - target lost for > {self.lost_timeout}s"); return SubtaskStatus.FAILED, sub.get_spin_damping_commands(sensors, self.target_depth)
-            return SubtaskStatus.RUNNING, sub.get_spin_damping_commands(sensors, self.target_depth)
-    def on_exit(self, sub: 'Submarine', sensors: SensorSuite, vision_data: Vision, context: Dict[str, Any]):
-        if not self.time_since_target_lost > 0: context['initial_heading'] = sensors.heading
+        # Gate out of view: either close-in (normal) or never seen (entered
+        # early); both end with a timed straight clearance run on the axis.
+        if not self._seen and self._elapsed < 4.0:
+            return SubtaskStatus.RUNNING, sub.ctrl.hold(
+                sensors, dt, self.target_depth, self._axis, surge=self.surge)
+        if self._lost_t is None:
+            self._lost_t = self._elapsed
+            if not self._seen:
+                print("WARN: DriveThroughGate never saw the gate — clearing blind")
+        cmds = sub.ctrl.hold(sensors, dt, self.target_depth, self._axis,
+                             surge=self.surge)
+        if self._elapsed - self._lost_t >= self.clear_secs:
+            return SubtaskStatus.COMPLETED, cmds
+        return SubtaskStatus.RUNNING, cmds
 
-# --- StyleRollSubtask ---
+    def get_dynamic_name(self, context):
+        phase = 'clear' if self._lost_t is not None else (
+            'track' if self._seen else 'entry')
+        return f"{self.name}({self.side} {phase})"
+
+
 class StyleRollSubtask(Subtask):
+    """Barrel roll through `degrees`, then level out.
+
+    The accumulated angle integrates imu.gyro_x — the sensor roll channel
+    folds at +/-90 degrees and cannot track a full rotation; the folded
+    channel is only used by the final leveling, where the true angle is near
+    a multiple of 360 and the fold is harmless. Depth stays closed-loop
+    through the rotation (the mixer realizes world heave at any roll angle)
+    and the compass cascade holds the axis. Times out COMPLETED: style points
+    must never strand a mission.
     """
-    Roll the sub through `degrees` (e.g. 720 = two full rolls) then level out.
+    ON_TIMEOUT = 'complete'
+    STOP_LEAD_DEG = 15.0
 
-    The accumulated angle is integrated from imu.gyro_x rather than read from
-    sensors.roll: the vehicle's roll channel is derived from an euler asin in
-    sensor_bridge and FOLDS at +/-90 deg, so it cannot track a full rotation.
-    The folded channel is only used for the final leveling PD, where (after a
-    multiple of 360 deg) the true angle is near 0 and the fold is harmless.
-
-    Heave is scaled by sign/max(0.3, |cos(roll)|) during the spin so the
-    vertical thrusters keep pushing the right way in the world frame while
-    inverted. Heading is held on context['initial_heading'] (set by the
-    preceding AlignToObjectX), so the sub stays pointed at the gate.
-
-    On timeout the subtask COMPLETES rather than fails — the roll is for
-    style points and must never kill the mission.
-    """
-    def __init__(self, degrees: float = 720.0, roll_power: float = 0.9,
-                 settle_deg: float = 3.0, settle_rate: float = 0.1,
-                 timeout: float = 120.0):
+    def __init__(self, degrees: float = 720.0, roll_power: float = 0.95,
+                 settle_deg: float = 2.5, settle_rate: float = 0.08,
+                 timeout: float = 90.0):
+        super().__init__()
         self.degrees = degrees
         self.roll_power = roll_power
         self.settle_deg = settle_deg
         self.settle_rate = settle_rate
-        self.timeout = timeout
-        self.target_depth: float = 0.1
-        self.reset()
-
-    def reset(self):
+        self.TIMEOUT = timeout
+        self.target_depth = 1.0
+        self._axis: Optional[float] = None
         self.accum = 0.0
-        self.timer = 0.0
         self.spinning = True
-        self.hold_heading: Optional[float] = None
 
-    def on_enter(self, sub: 'Submarine', sensors: SensorSuite, vision_data: Vision, context: Dict[str, Any]):
-        self.reset()
+    def on_enter(self, sub, sensors, vision, context):
         self.target_depth = context.get('target_depth', sensors.depth)
-        self.hold_heading = context.get('initial_heading', sensors.heading)
-        print(f"INFO: StyleRoll starting: {self.degrees:.0f} deg at depth {self.target_depth:.2f} m")
+        self._axis = context.get('axis', sensors.heading)
+        self.accum = 0.0
+        self.spinning = True
+        print(f"INFO: StyleRoll {self.degrees:.0f} deg at "
+              f"{self.target_depth:.2f} m, axis {self._axis:.1f}")
 
-    def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite, vision_data: Vision, config: SimulationConfig, context: Dict[str, Any]) -> Tuple[SubtaskStatus, ThrusterCommands]:
-        if self.hold_heading is None:
-            self.on_enter(sub, sensors, vision_data, context)
-        self.timer += dt
+    def execute(self, sub, dt, sensors, vision, config, context):
         self.accum += math.degrees(sensors.imu.gyro_x) * dt
 
-        if self.timer > self.timeout:
-            print(f"WARN: StyleRoll timed out at {self.accum:.0f}/{self.degrees:.0f} deg — completing anyway")
-            return SubtaskStatus.COMPLETED, sub._get_damping_commands(sensors)
-
-        yaw = float(np.clip(
-            math.radians(angle_diff(self.hold_heading, sensors.heading)) * sub.HOVER_YAW_P_GAIN
-            - sensors.imu.gyro_z * sub.YAW_D_GAIN, -1.0, 1.0))
-
         if self.spinning:
-            if abs(self.accum) >= self.degrees - 15.0:
+            if abs(self.accum) >= abs(self.degrees) - self.STOP_LEAD_DEG:
                 self.spinning = False
-                return SubtaskStatus.RUNNING, sub._get_damping_commands(sensors)
-            # World-frame-correct heave while rotating: cos from the integrated
-            # angle (the folded sensor channel is wrong past +/-90).
-            cos_roll = math.cos(math.radians(self.accum))
-            sign = 1.0 if cos_roll >= 0 else -1.0
-            heave_scale = sign / max(0.3, abs(cos_roll))
-            heave, _ = sub.get_depth_roll_commands(sensors, self.target_depth)
-            heave = float(np.clip(heave * heave_scale, -1.0, 1.0))
-            return SubtaskStatus.RUNNING, sub._mix_and_normalize_commands(
-                0.0, 0.0, yaw, heave, self.roll_power)
+            else:
+                return SubtaskStatus.RUNNING, sub.ctrl.roll_spin(
+                    sensors, dt, self.target_depth,
+                    math.copysign(self.roll_power, self.degrees),
+                    self._axis, self.accum)
 
-        # Leveling: near a multiple of 360 the folded roll channel is valid
-        if (abs(sensors.roll) < self.settle_deg
+        cmds = sub.ctrl.hold(sensors, dt, self.target_depth, self._axis)
+        if (abs(angle_diff(0.0, sensors.roll)) < self.settle_deg
                 and abs(sensors.imu.gyro_x) < self.settle_rate):
-            print(f"INFO: StyleRoll complete: {self.accum:.0f} deg accumulated, "
-                  f"leveled at {sensors.roll:+.1f} deg")
-            return SubtaskStatus.COMPLETED, sub._get_damping_commands(sensors)
-        heave, roll_cmd = sub.get_depth_roll_commands(sensors, self.target_depth, 0.0)
-        return SubtaskStatus.RUNNING, sub._mix_and_normalize_commands(
-            0.0, 0.0, yaw, heave, roll_cmd)
+            print(f"INFO: StyleRoll done: {self.accum:.0f} deg, "
+                  f"leveled at {sensors.roll:+.1f}")
+            return SubtaskStatus.COMPLETED, cmds
+        return SubtaskStatus.RUNNING, cmds
 
-    def get_dynamic_name(self, context: Dict[str, Any]) -> str:
-        phase = "spin" if self.spinning else "level"
-        return f"{self.name}({self.accum:+.0f}/{self.degrees:.0f} deg {phase})"
+    def get_dynamic_name(self, context):
+        phase = 'spin' if self.spinning else 'level'
+        return f"{self.name}({self.accum:+.0f}/{self.degrees:.0f} {phase})"
+
+
+# ---------------------------------------------------------------------------
+# generic vision-drive (kept for orbit course & compatibility)
+# ---------------------------------------------------------------------------
+
+class DriveUntilTargetLost(Subtask):
+    """Surge on the held axis until a previously-visible target is lost.
+    Fails only if the target is never seen within the acquire window."""
+    ON_TIMEOUT = 'complete'
+
+    def __init__(self, surge_power: float = 0.5, target_type: str = 'gate',
+                 acquire_timeout: float = 10.0, timeout: float = 60.0):
+        super().__init__()
+        self.surge = surge_power
+        self.target_type = target_type
+        self.acquire_timeout = acquire_timeout
+        self.TIMEOUT = timeout
+        self.target_depth = 1.0
+        self._axis: Optional[float] = None
+        self._seen = False
+
+    def on_enter(self, sub, sensors, vision, context):
+        self.target_depth = context.get('target_depth', sensors.depth)
+        self._axis = context.get('axis', sensors.heading)
+        self._seen = False
+
+    def execute(self, sub, dt, sensors, vision, config, context):
+        cmds = sub.ctrl.hold(sensors, dt, self.target_depth, self._axis,
+                             surge=self.surge)
+        if _is_visible(vision, self.target_type):
+            self._seen = True
+            return SubtaskStatus.RUNNING, cmds
+        if self._seen:
+            return SubtaskStatus.COMPLETED, cmds
+        if self._elapsed > self.acquire_timeout:
+            print(f"ERROR: DriveUntilTargetLost never saw '{self.target_type}'")
+            return SubtaskStatus.FAILED, cmds
+        return SubtaskStatus.RUNNING, cmds
+
+
+# Forward variant is the same behavior at a different default power.
+class DriveUntilTargetLostForward(DriveUntilTargetLost):
+    def __init__(self, surge_power: float = 0.4, target_type: str = 'pole'):
+        super().__init__(surge_power=surge_power, target_type=target_type)
+
+
+class SwayUntilTargetLost(Subtask):
+    """Sway on the held axis until the target leaves the frame."""
+    ON_TIMEOUT = 'complete'
+
+    def __init__(self, sway_power: float = -0.3, target_type: str = 'pole',
+                 timeout: float = 45.0):
+        super().__init__()
+        self.sway = sway_power
+        self.target_type = target_type
+        self.TIMEOUT = timeout
+        self.target_depth = 1.0
+        self._axis: Optional[float] = None
+
+    def on_enter(self, sub, sensors, vision, context):
+        self.target_depth = context.get('target_depth', sensors.depth)
+        self._axis = context.get('axis', sensors.heading)
+
+    def execute(self, sub, dt, sensors, vision, config, context):
+        cmds = sub.ctrl.hold(sensors, dt, self.target_depth, self._axis,
+                             sway=self.sway)
+        if not _is_visible(vision, self.target_type):
+            return SubtaskStatus.COMPLETED, cmds
+        return SubtaskStatus.RUNNING, cmds
+
+    def get_dynamic_name(self, context):
+        return f"{self.name}({self.sway:+.1f})"
+
+
+class AlignToObjectX(Subtask):
+    """Point the nose at the target (pixel-yaw). Used on the orbit course
+    where the vehicle must face the marker; the gate leg centers by sway
+    instead (see CenterOnGateHalf)."""
+    ON_TIMEOUT = 'fail'
+
+    def __init__(self, target_x_fraction: float = 0.5, tolerance_px: int = 12,
+                 timeout: float = 40.0, **_legacy):
+        super().__init__()
+        self.frac = target_x_fraction
+        self.tol_px = tolerance_px
+        self.TIMEOUT = timeout
+        self.target_depth = 1.0
+
+    def on_enter(self, sub, sensors, vision, context):
+        self.target_depth = context.get('target_depth', sensors.depth)
+        sub.ctrl.reset_pixel_servo()
+
+    def execute(self, sub, dt, sensors, vision, config, context):
+        cx = _target_center_x(vision)
+        if cx is None:
+            return SubtaskStatus.RUNNING, sub.ctrl.hold(
+                sensors, dt, self.target_depth)
+        cam_w = sensors.camera_image.shape[1]
+        err_px = cx - cam_w * self.frac
+        cmds = sub.ctrl.track_pixel_yaw(sensors, dt, self.target_depth,
+                                        err_px / (cam_w / 2.0))
+        if abs(err_px) < self.tol_px and abs(sensors.imu.gyro_z) < 0.05:
+            context['axis'] = sensors.heading   # facing the target now
+            return SubtaskStatus.COMPLETED, cmds
+        return SubtaskStatus.RUNNING, cmds
+
+
+class ApproachAndCenterObject(Subtask):
+    """Close on the pole to a target apparent height while keeping the nose
+    on it (orbit course)."""
+    ON_TIMEOUT = 'fail'
+
+    def __init__(self, height_threshold_px: int,
+                 target_x_fraction: float = 0.5, surge_p_gain: float = 0.1,
+                 height_tolerance_px: int = 10, lost_timeout: float = 2.5,
+                 timeout: float = 90.0, **_legacy):
+        super().__init__()
+        self.height_px = height_threshold_px
+        self.frac = target_x_fraction
+        self.surge_p = surge_p_gain
+        self.height_tol = height_tolerance_px
+        self.lost_timeout = lost_timeout
+        self.TIMEOUT = timeout
+        self.target_depth = 1.0
+        self._lost = 0.0
+
+    def on_enter(self, sub, sensors, vision, context):
+        self.target_depth = context.get('target_depth', sensors.depth)
+        self._lost = 0.0
+        sub.ctrl.reset_pixel_servo()
+
+    def execute(self, sub, dt, sensors, vision, config, context):
+        pole = vision.get_best_pole()
+        if pole is None:
+            self._lost += dt
+            if self._lost > self.lost_timeout:
+                print("ERROR: ApproachAndCenterObject lost the pole")
+                return SubtaskStatus.FAILED, sub.ctrl.hold(
+                    sensors, dt, self.target_depth)
+            return SubtaskStatus.RUNNING, sub.ctrl.hold(
+                sensors, dt, self.target_depth)
+        self._lost = 0.0
+        cam_w = sensors.camera_image.shape[1]
+        err_px = pole['center_x'] - cam_w * self.frac
+        h_err = self.height_px - pole['height']
+        surge = float(np.clip(h_err * self.surge_p, -0.4, 0.5))
+        cmds = sub.ctrl.track_pixel_yaw(sensors, dt, self.target_depth,
+                                        err_px / (cam_w / 2.0), surge=surge)
+        if abs(h_err) < self.height_tol and abs(err_px) < 20:
+            context['axis'] = sensors.heading
+            return SubtaskStatus.COMPLETED, cmds
+        return SubtaskStatus.RUNNING, cmds
+
+
+class DynamicOrbitPole(Subtask):
+    """Orbit the pole (constant sway + pixel-yaw pointing + width-PID range
+    hold) until the gate appears to the pole's right (orbit course exit
+    condition)."""
+    ON_TIMEOUT = 'complete'   # valve: proceed to the return gate regardless
+
+    def __init__(self, target_x_fraction: float = 0.5,
+                 sway_power: float = -0.3,
+                 target_pole_width_fraction: float = 0.06,
+                 orbit_width_p_gain: float = 0.03,
+                 orbit_width_i_gain: float = 0.01,
+                 orbit_width_d_gain: float = 0.05,
+                 orbit_width_i_clamp: float = 0.3,
+                 lost_timeout: float = 3.0,
+                 min_orbit_time: float = 5.0,
+                 timeout: float = 150.0, **_legacy):
+        super().__init__()
+        self.frac = target_x_fraction
+        self.sway = sway_power
+        self.width_frac = target_pole_width_fraction
+        self.wp, self.wi, self.wd = (orbit_width_p_gain, orbit_width_i_gain,
+                                     orbit_width_d_gain)
+        self.wi_clamp = orbit_width_i_clamp
+        self.lost_timeout = lost_timeout
+        self.min_orbit_time = min_orbit_time
+        self.TIMEOUT = timeout
+        self.target_depth = 1.0
+        self._lost = 0.0
+        self._orbit_t = 0.0
+        self._w_i = 0.0
+        self._w_err_prev = 0.0
+
+    def on_enter(self, sub, sensors, vision, context):
+        self.target_depth = context.get('target_depth', sensors.depth)
+        self._lost = 0.0
+        self._orbit_t = 0.0
+        self._w_i = 0.0
+        self._w_err_prev = 0.0
+        sub.ctrl.reset_pixel_servo()
+
+    def execute(self, sub, dt, sensors, vision, config, context):
+        pole = vision.get_best_pole()
+        gate_x = vision.get_gate_center_x() if vision.is_gate_visible() else None
+
+        if (pole is not None and gate_x is not None
+                and gate_x > pole['center_x']
+                and self._orbit_t >= self.min_orbit_time):
+            print("INFO: orbit exit — gate right of pole")
+            context['axis'] = sensors.heading
+            return SubtaskStatus.COMPLETED, sub.ctrl.hold(
+                sensors, dt, self.target_depth)
+
+        if pole is None:
+            self._lost += dt
+            if self._lost > self.lost_timeout:
+                print("ERROR: DynamicOrbitPole lost the pole")
+                return SubtaskStatus.FAILED, sub.ctrl.hold(
+                    sensors, dt, self.target_depth)
+            return SubtaskStatus.RUNNING, sub.ctrl.scan(
+                sensors, dt, self.target_depth, -0.2)
+
+        self._lost = 0.0
+        self._orbit_t += dt
+        cam_w = sensors.camera_image.shape[1]
+        err_px = pole['center_x'] - cam_w * self.frac
+        w_err = cam_w * self.width_frac - pole['width']
+        self._w_i = float(np.clip(self._w_i + w_err * dt,
+                                  -self.wi_clamp, self.wi_clamp))
+        w_rate = (w_err - self._w_err_prev) / dt if dt > 0 else 0.0
+        self._w_err_prev = w_err
+        surge = float(np.clip(w_err * self.wp + self._w_i * self.wi
+                              + w_rate * self.wd, -0.5, 0.5))
+        return SubtaskStatus.RUNNING, sub.ctrl.track_pixel_yaw(
+            sensors, dt, self.target_depth, err_px / (cam_w / 2.0),
+            surge=surge, sway=self.sway)
+
+    def get_dynamic_name(self, context):
+        return f"{self.name}(orbit {self._orbit_t:.0f}s)"

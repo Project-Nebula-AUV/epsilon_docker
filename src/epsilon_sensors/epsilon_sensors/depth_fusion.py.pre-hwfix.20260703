@@ -1,0 +1,330 @@
+import math
+
+import rclpy
+from rclpy.node import Node
+from rclpy.executors import ExternalShutdownException
+from sensor_msgs.msg import Imu
+from geometry_msgs.msg import Vector3Stamped
+from std_msgs.msg import Float32
+
+
+class DepthFusion(Node):
+    """Dead-reckon depth between sparse MS5837 reads using the BNO055.
+
+    The MS5837 on this vehicle only delivers ~1.2 accepted reads/s with gaps
+    up to ~5 s, and some bus corruption survives the driver's range checks
+    (e.g. a bit-shifted D1 that lands ~0.5 m off; see sanity_5min.log). The
+    BNO055 publishes 20 Hz gravity-removed body-frame acceleration plus an
+    absolute orientation quaternion. This node:
+
+      * extracts the vertical component of the body-frame acceleration and
+        double-integrates it to propagate depth between pressure reads.
+        The vertical direction comes from the BNO055's own gravity vector
+        (/imu/gravity, projected in the body frame), so ANY mounting
+        orientation -- including one that changes between missions -- is
+        handled without axis conventions; when no fresh gravity sample is
+        available it falls back to rotating by the orientation quaternion
+        (mathematically equivalent, but trusts quaternion conventions),
+      * gates every incoming pressure read against that prediction (window
+        grows with the time since the last accepted read, capped so far-out
+        garbage never gets in), with a 2-read consensus override: two
+        consecutive out-of-gate reads that agree with each other re-anchor
+        the filter, so a drifted prediction can never lock out real data, and
+      * on each accepted read snaps depth to the measurement and re-derives
+        vertical velocity from consecutive accepted reads, which also kills
+        any velocity drift accumulated during the gap.
+
+    Subscribes /depth_raw (driver) + /imu, publishes the fused estimate on
+    /depth at IMU rate, so downstream (sensor_bridge -> nav) sees a
+    continuous depth instead of a 1 Hz signal with multi-second holes.
+
+    Two drift guards on the pure double integral, both disable-able:
+      * accel bias is tracked as a slow EMA of the vertical acceleration
+        (the sub's mean vertical accel is ~0 on any control timescale), and
+      * velocity leaks toward 0 with a long time constant, bounding the
+        worst-case runaway if the sensor dies outright.
+    Until the first accepted pressure read there is no absolute reference,
+    so nothing is published (same downstream behavior as a dead sensor).
+    """
+
+    def __init__(self):
+        super().__init__('depth_fusion')
+
+        # World +Z is up in the BNO055 fusion frame => depth (down+) second
+        # derivative = -a_world_z. Set -1.0 only if the frame proves flipped.
+        # Applies to both the gravity-projection and quaternion paths (the
+        # BNO055 gravity vector points UP, i.e. reads (0,0,+9.81) when flat).
+        self.world_z_sign = float(self.declare_parameter('world_z_sign', 1.0).value)
+        # Max age of the last gravity sample before falling back to the
+        # quaternion. Attitude changes slowly relative to this, so a slightly
+        # stale vertical is fine; a corrupted one is not (gated upstream).
+        self.grav_max_age = float(self.declare_parameter('grav_max_age_s', 1.0).value)
+        # Accel bias EMA time constant (s); 0 disables.
+        self.bias_tau = float(self.declare_parameter('bias_tau', 30.0).value)
+        # Velocity leak toward 0 (s); 0 disables. Bounds drift if depth dies.
+        self.vel_leak_tau = float(self.declare_parameter('vel_leak_tau', 10.0).value)
+        # Physical clamps: the vehicle can't exceed these vertically, so
+        # anything past them is bus corruption, not motion. max_accel guards
+        # the integrator against single corrupt IMU samples (bus 1 silently
+        # corrupts ~7% of ACKed reads; one 5 m/s^2 spike at dt=0.1 s would
+        # kick velocity by 0.5 m/s).
+        self.max_speed = float(self.declare_parameter('max_speed', 1.5).value)
+        self.max_accel = float(self.declare_parameter('max_accel', 4.0).value)
+        # Don't integrate across IMU dropouts longer than this (s).
+        self.max_imu_dt = float(self.declare_parameter('max_imu_dt', 0.5).value)
+        # Innovation gate: accept a read if |meas - pred| <= base + rate*gap,
+        # capped at gate_max. The cap matters: the bench run showed corrupt
+        # reads landing anywhere in +-100 m, so an uncapped gate after a
+        # multi-second gap admits ~1 m garbage. A capped gate can't lock out
+        # real data because of the consensus override below.
+        self.gate_base = float(self.declare_parameter('gate_base_m', 0.2).value)
+        self.gate_rate = float(self.declare_parameter('gate_rate_m_per_s', 0.4).value)
+        self.gate_max = float(self.declare_parameter('gate_max_m', 0.5).value)
+        # Consensus override: two consecutive out-of-gate reads that agree
+        # with EACH OTHER within this tolerance re-anchor the filter -- if
+        # the prediction has drifted (or the first fix was bad), the sensor
+        # wins on evidence rather than on a timeout. Corrupt reads scatter
+        # over tens of metres, so two agreeing corrupt reads in a row are
+        # rare, and a false re-anchor self-heals the same way.
+        self.consensus_tol = float(self.declare_parameter('consensus_tol_m', 0.25).value)
+        self.pending_max_age = float(self.declare_parameter('pending_max_age_s', 2.0).value)
+        # First fix only: the vehicle is static at startup, so two reads
+        # agreeing across a much longer window are still strong evidence.
+        # Without this a badly degraded bus (reads tens of seconds apart)
+        # can never anchor the filter at all.
+        self.first_fix_max_age = float(self.declare_parameter('first_fix_max_age_s', 15.0).value)
+        # Velocity from consecutive accepted reads: max usable gap and blend.
+        # The blend is scaled by the gap (cm-level read noise over a short
+        # gap is a huge velocity, so short gaps get little say).
+        self.vel_meas_max_gap = float(self.declare_parameter('vel_meas_max_gap_s', 3.0).value)
+        self.vel_blend = float(self.declare_parameter('vel_blend', 0.7).value)
+
+        self.pub_depth = self.create_publisher(Float32, '/depth', 10)
+        # meas - pred at each accepted read; a live health/tuning signal.
+        self.pub_innov = self.create_publisher(Float32, '/depth_fusion/innovation', 10)
+
+        self.create_subscription(Imu, '/imu', self.on_imu, 10)
+        self.create_subscription(Vector3Stamped, '/imu/gravity', self.on_gravity, 10)
+        self.create_subscription(Float32, '/depth_raw', self.on_depth_raw, 10)
+
+        self._depth = None       # fused depth (m, down+); None until first fix
+        self._vel = 0.0          # fused vertical velocity (m/s, down+)
+        self._bias = 0.0         # learned accel bias (m/s^2, depth frame)
+        self._last_imu_t = None
+        self._last_accept_t = None
+        self._last_accept_z = None
+        self._pending = None     # (t, z) of the last out-of-gate read
+        self._accel_hist = []    # last 3 vertical accels; median kills spikes
+        self._gravity = None     # (t, unit "up" vector in body frame)
+        self._last_quat = None   # normalized (w,x,y,z) from the last IMU msg
+        self._accepted = 0
+        self._rejected = 0
+        self._reanchors = 0
+        self._n_grav = 0         # IMU samples resolved via gravity projection
+        self._n_quat = 0         # ... via quaternion fallback
+
+        # Publish on a fixed clock rather than from the sensor callbacks, so
+        # a simultaneous IMU + depth dropout can't leave a hole in /depth --
+        # downstream sees a continuous stream; during a total blackout the
+        # estimate just freezes (velocity leaks to 0), which is the same
+        # behavior the nav already accepts from synthetic_depth mode.
+        self.create_timer(0.05, self.on_publish_timer)
+        self.create_timer(10.0, self.on_status_timer)
+        self.get_logger().info('depth fusion node started (waiting for first pressure fix)')
+
+    def _now(self):
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    def on_imu(self, msg):
+        t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        if t <= 0.0:
+            t = self._now()
+        if self._last_imu_t is None:
+            self._last_imu_t = t
+            return
+        dt = t - self._last_imu_t
+        self._last_imu_t = t
+        if dt <= 0.0 or dt > self.max_imu_dt:
+            return  # clock jump or IMU dropout: hold rather than integrate
+
+        # Keep the latest valid quaternion as the fallback vertical reference
+        # (a zero/corrupt one is published as all-zeros by the driver).
+        q = msg.orientation
+        n2 = q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z
+        if n2 >= 1e-6:
+            n = math.sqrt(n2)
+            self._last_quat = (q.w / n, q.x / n, q.y / n, q.z / n)
+
+        a = msg.linear_acceleration
+        a_up = self._vertical_accel(t, a)
+        if a_up is None:
+            return  # no usable vertical reference yet
+        a_depth = -self.world_z_sign * a_up
+
+        # Median-of-3 before integrating: a silently-corrupted accel sample
+        # (ACKed read, wrong bytes) appears as a one-tick spike, and the
+        # median rejects it outright at the cost of one sample of lag.
+        self._accel_hist.append(a_depth)
+        if len(self._accel_hist) > 3:
+            self._accel_hist.pop(0)
+        a_med = sorted(self._accel_hist)[len(self._accel_hist) // 2]
+
+        if self.bias_tau > 0.0:
+            alpha = dt / (self.bias_tau + dt)
+            self._bias += alpha * (a_med - self._bias)
+        a_est = a_med - self._bias
+        a_est = max(-self.max_accel, min(self.max_accel, a_est))
+
+        if self._depth is None:
+            return  # bias keeps learning pre-fix, but there's nothing to propagate
+
+        self._vel += a_est * dt
+        if self.vel_leak_tau > 0.0:
+            self._vel *= math.exp(-dt / self.vel_leak_tau)
+        self._vel = max(-self.max_speed, min(self.max_speed, self._vel))
+        self._depth += self._vel * dt + 0.5 * a_est * dt * dt
+
+    def _vertical_accel(self, t, a):
+        """Upward component of the body-frame linear acceleration `a`.
+
+        Primary: project onto the BNO055-measured gravity direction (the
+        actual local vertical in body coordinates) -- correct for any
+        mounting orientation with no quaternion axis/ordering assumptions.
+        Fallback: world-Z row of the quaternion rotation, for cycles where
+        the extra gravity read failed on the flaky bus. Returns None when
+        neither reference is usable.
+        """
+        g = self._gravity
+        if g is not None and (t - g[0]) <= self.grav_max_age:
+            self._n_grav += 1
+            return a.x * g[1] + a.y * g[2] + a.z * g[3]
+
+        q = self._last_quat
+        if q is not None:
+            w, x, y, z = q
+            self._n_quat += 1
+            return (2.0 * (x * z - w * y) * a.x
+                    + 2.0 * (y * z + w * x) * a.y
+                    + (1.0 - 2.0 * (x * x + y * y)) * a.z)
+        return None
+
+    def on_gravity(self, msg):
+        t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        if t <= 0.0:
+            t = self._now()
+        v = msg.vector
+        n = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+        if n < 1e-3:
+            return
+        # BNO055 gravity output points UP (reads (0,0,+9.81) lying flat).
+        self._gravity = (t, v.x / n, v.y / n, v.z / n)
+
+    def on_depth_raw(self, msg):
+        now = self._now()
+        z = float(msg.data)
+
+        if self._depth is None:
+            # No anchor yet: require two agreeing reads so a single corrupt
+            # read can't set the initial depth.
+            if self._consensus(now, z, max_age=self.first_fix_max_age):
+                self._pending = None
+                self._accept(now, z, v_meas=None)
+                self.get_logger().info('first pressure fix: %.3f m' % z)
+            else:
+                self._pending = (now, z)
+            return
+
+        gap = now - self._last_accept_t
+        innov = z - self._depth
+        gate = min(self.gate_base + self.gate_rate * gap, self.gate_max)
+
+        if abs(innov) <= gate:
+            self._pending = None
+            self.pub_innov.publish(Float32(data=float(innov)))
+            v_meas = None
+            if 0.0 < gap <= self.vel_meas_max_gap:
+                # Average velocity across the gap replaces the integrated
+                # one -- this is what zeroes out accumulated drift. Blend
+                # strength scales with the gap (a cm of read noise over a
+                # short gap is a large phantom velocity).
+                v_raw = (z - self._last_accept_z) / gap
+                v_raw = max(-self.max_speed, min(self.max_speed, v_raw))
+                blend = self.vel_blend * min(1.0, gap)
+                v_meas = blend * v_raw + (1.0 - blend) * self._vel
+            self._accept(now, z, v_meas)
+            return
+
+        if self._consensus(now, z):
+            # Two consecutive reads agree with each other but not with the
+            # prediction: the prediction is what's wrong. Re-anchor to the
+            # sensor and take the slope of the agreeing pair as velocity.
+            t_p, z_p = self._pending
+            self._pending = None
+            self._reanchors += 1
+            v_meas = None
+            if now - t_p >= 0.15:
+                v_meas = (z - z_p) / (now - t_p)
+                v_meas = max(-self.max_speed, min(self.max_speed, v_meas))
+            self.get_logger().warn(
+                're-anchor to %.3f m on 2-read consensus (pred was %.3f, innov %+.3f)'
+                % (z, self._depth, innov))
+            self._accept(now, z, v_meas)
+            return
+
+        self._rejected += 1
+        self._pending = (now, z)
+        self.get_logger().warn(
+            'rejected depth read %.3f m (pred %.3f, innov %+.3f > gate %.3f, gap %.2fs)'
+            % (z, self._depth, innov, gate, gap),
+            throttle_duration_sec=2.0)
+
+    def _consensus(self, now, z, max_age=None):
+        """True if (now, z) agrees with the pending out-of-gate read."""
+        if max_age is None:
+            max_age = self.pending_max_age
+        return (self._pending is not None
+                and now - self._pending[0] <= max_age
+                and abs(z - self._pending[1]) <= self.consensus_tol)
+
+    def _accept(self, now, z, v_meas):
+        self._accepted += 1
+        self._depth = z
+        if v_meas is not None:
+            self._vel = v_meas
+        self._last_accept_t = now
+        self._last_accept_z = z
+        self.pub_depth.publish(Float32(data=float(self._depth)))
+
+    def on_publish_timer(self):
+        if self._depth is not None:
+            self.pub_depth.publish(Float32(data=float(self._depth)))
+
+    def on_status_timer(self):
+        if self._depth is None:
+            self.get_logger().info('no pressure fix yet (accepted=0)')
+            return
+        age = self._now() - self._last_accept_t
+        self.get_logger().info(
+            'depth %.3f m, vel %+.3f m/s, bias %+.4f m/s^2, accepted %d, rejected %d, '
+            're-anchors %d, vertical ref grav/quat %d/%d, last fix %.1fs ago'
+            % (self._depth, self._vel, self._bias, self._accepted, self._rejected,
+               self._reanchors, self._n_grav, self._n_quat, age))
+
+
+def main(args=None):
+    rclpy.init(args=args)
+
+    node = DepthFusion()
+
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

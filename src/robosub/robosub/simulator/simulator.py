@@ -63,7 +63,13 @@ class SubmarineSimulator:
         self.resetSimulation()
 
     def resetSimulation(self):
-        # (resetSimulation remains the same)
+        # Test-only reproducibility/start-pose knobs (defaults unchanged):
+        #   ROBOSUB_SIM_SEED    int — seeds the course randomization
+        #   ROBOSUB_START_X/Y   float — override the start position
+        #   ROBOSUB_START_HDG   float — override the start heading (deg)
+        seed = os.environ.get('ROBOSUB_SIM_SEED')
+        if seed:
+            random.seed(int(seed))
         self.prequal_gate = PrequalGate(
             x = self.prequal_config.GATE_X_POS, center_y = self.config.worldHeight / 2,
             z_top = self.prequal_config.GATE_DEPTH_METERS, width = self.prequal_config.GATE_WIDTH_METERS,
@@ -84,25 +90,44 @@ class SubmarineSimulator:
             gate_x = self.prequal_config.GATE_X_POS
             spacing = 1.524            # white-red-white lateral spacing
             wiggle = spacing * 0.25
-            last_y = self.config.worldHeight / 2
-            z_top = self.config.worldDepth - (0.9 + random.uniform(0.3, 0.6))
+            # The whole lane sits laterally offset from the gate axis —
+            # competition courses are staggered, so the vehicle must search
+            # and translate to acquire the lane, not find it dead ahead.
+            # Randomized per run; ROBOSUB_LANE_OFFSET forces a value (m,
+            # + = world +y / port side when facing the course).
+            off_env = os.environ.get('ROBOSUB_LANE_OFFSET')
+            lane_offset = (float(off_env) if off_env
+                           else random.uniform(-2.5, 2.5))
+            print(f"[sim] slalom lane offset {lane_offset:+.2f} m", flush=True)
+            last_y = self.config.worldHeight / 2 + lane_offset
             for i in range(3):
                 sx = gate_x + 8.0 + i * 4.0
                 y = last_y + random.uniform(-wiggle, wiggle) if i > 0 else last_y
                 y = float(np.clip(y, spacing * 2, self.config.worldHeight - spacing * 2))
                 last_y = y
+                # Poles rise from the pool floor — bottom fixed at worldDepth,
+                # height randomized so the top varies (previously the TOP
+                # depth was randomized independent of height, which left the
+                # bottoms floating 0.3-0.6m short of the floor instead of
+                # planted in it).
+                pole_height = 0.9 + random.uniform(0.3, 0.6)
+                z_top = self.config.worldDepth - pole_height
                 self.slalom_poles += [
-                    SlalomPole(x=sx, y=y - spacing, z=z_top, color=WHITE),
-                    SlalomPole(x=sx, y=y,           z=z_top, color=RED),
-                    SlalomPole(x=sx, y=y + spacing, z=z_top, color=WHITE),
+                    SlalomPole(x=sx, y=y - spacing, z=z_top, height=pole_height, color=WHITE),
+                    SlalomPole(x=sx, y=y,           z=z_top, height=pole_height, color=RED),
+                    SlalomPole(x=sx, y=y + spacing, z=z_top, height=pole_height, color=WHITE),
                 ]
 
-        start_heading = 0
+        start_x = float(os.environ.get('ROBOSUB_START_X',
+                                       self.prequal_config.START_X_POS))
+        start_y = float(os.environ.get(
+            'ROBOSUB_START_Y',
+            self.config.worldHeight / 2 + random.uniform(-0.5, 0.5)))
+        start_heading = float(os.environ.get('ROBOSUB_START_HDG', 0.0))
         start_depth = self.prequal_config.START_Z_POS
 
         self.subPhysics = SubmarinePhysicsState(
-            x = self.prequal_config.START_X_POS, y = self.config.worldHeight / 2 + random.uniform(-0.5, 0.5),
-            z = start_depth,
+            x = start_x, y = start_y, z = start_depth,
             heading = start_heading, pitch = 0.0
         )
         if self.submarineAI:
@@ -136,7 +161,10 @@ class SubmarineSimulator:
         thrust_sway  = (f_hfl - f_hfr - f_hal + f_har) * cos_45
         thrust_heave = f_vp + f_vs
         sub_w_half = self.config.submarineWidth / 2
-        thrust_yaw  = (commands.hfl - commands.hfr + commands.hal - commands.har) * self.thrusterMaxForce
+        # Yaw torque with an explicit moment arm (was an implicit 1.0 m —
+        # ~3x optimistic on this hull; roll below has always used its arm).
+        thrust_yaw  = ((commands.hfl - commands.hfr + commands.hal - commands.har)
+                       * self.thrusterMaxForce * self.config.yawMomentArm)
         thrust_roll = (f_vp - f_vs) * sub_w_half   # port−starboard differential → roll
         h_rad = math.radians(self.subPhysics.heading)
         cos_h, sin_h = math.cos(h_rad), math.sin(h_rad)
@@ -182,6 +210,7 @@ class SubmarineSimulator:
             gyro_z=self.subPhysics.angular_velocity_z,
             gyro_x=self.subPhysics.angular_velocity_x,
         )
+        prev_x = self.subPhysics.x
         self.subPhysics.x += self.subPhysics.velocity_x * dt
         self.subPhysics.y += self.subPhysics.velocity_y * dt
         self.subPhysics.z += self.subPhysics.velocity_z * dt
@@ -196,14 +225,42 @@ class SubmarineSimulator:
         self.subPhysics.y = np.clip(self.subPhysics.y, margin, self.config.worldHeight - margin)
         self.subPhysics.z = np.clip(self.subPhysics.z, 0.0, self.config.worldDepth - 0.2)
 
+        # Gate is a solid structure, not a checkpoint: crossing its X-plane
+        # only counts as passing through the physical opening (between the
+        # posts, under the bar). Anywhere else it's a wall — block the
+        # crossing instead of letting the sub swim over the top or around
+        # the sides.
+        g = self.prequal_gate
+        if g is not None:
+            new_side = np.sign(self.subPhysics.x - g.x)
+            old_side = np.sign(prev_x - g.x)
+            if old_side != 0 and new_side != 0 and old_side != new_side:
+                half_w = g.width / 2
+                within_lateral = abs(self.subPhysics.y - g.center_y) <= half_w
+                within_depth = self.subPhysics.z >= g.z_top
+                if not (within_lateral and within_depth):
+                    # Push back onto the ORIGINAL side (old_side is the sign
+                    # of prev_x - g.x, so stepping +0.05 along it restores the
+                    # approach side; the previous -0.05 teleported the vehicle
+                    # THROUGH the wall).
+                    self.subPhysics.x = g.x + old_side * 0.05
+                    self.subPhysics.velocity_x = 0.0
+
     def project3D(self, world_pos: Tuple[float, float, float]) -> Optional[Tuple[int, int, float]]:
-        # (Remains the same)
         dx,dy,dz = world_pos[0]-self.subPhysics.x, world_pos[1]-self.subPhysics.y, world_pos[2]-self.subPhysics.z
         h,p = math.radians(-self.subPhysics.heading), math.radians(-self.subPhysics.pitch)
         ch,sh,cp,sp = math.cos(h),math.sin(h),math.cos(p),math.sin(p)
         x_yaw, y_yaw = dx*ch-dy*sh, dx*sh+dy*ch
         cz,cy,cx = x_yaw*cp+dz*sp, x_yaw*sp-dz*cp, y_yaw
         if cz < 0.2: return None
+        # Roll the image plane about the forward (cz) axis so the onboard
+        # camera view actually tumbles during a barrel roll — previously roll
+        # was tracked in physics but never reached the projection, so the
+        # style-roll maneuver was invisible in the camera feed (looked like
+        # the sub was just drifting rather than rolling).
+        r = math.radians(self.subPhysics.roll)
+        cr, sr = math.cos(r), math.sin(r)
+        cx, cy = cx*cr - cy*sr, cx*sr + cy*cr
         w,h = self.cameraSurface.get_size()
         f = w/(2*math.tan(math.radians(self.config.cameraFov/2)))
         return int(w/2-f*(cx/cz)), int(h/2-f*(cy/cz)), math.hypot(dx,dy,dz)
@@ -219,8 +276,6 @@ class SubmarineSimulator:
              self.cameraSurface.blit(self.camera_background_pano, (x_off - bg_w, -y_off))
         else:
              self.cameraSurface.fill(WATER_COLOR)
-             hp = self.project3D((self.subPhysics.x+20, self.subPhysics.y, self.config.worldDepth))
-             if hp: pygame.draw.rect(self.cameraSurface, POOL_FLOOR_COLOR, (0,hp[1],w,h))
 
         drawable = []
         if self.prequal_gate:
@@ -242,6 +297,29 @@ class SubmarineSimulator:
              if r_bar and r_bot:
                  avg_dist = (r_bar[2] + r_bot[2]) / 2
                  drawable.append((avg_dist, 'line', pole_color, r_bar[:2], r_bot[:2], 5)) # Pole is RED
+
+             # RoboSub Task-1-style trim: a short divider hanging from the
+             # bar's midpoint, and two placard "pictures" hanging near the
+             # posts — cosmetic only, distinct color so vision (which only
+             # looks for RED/WHITE blobs) ignores them.
+             pc = self.prequal_config
+             c_bar = self.project3D((g.x, g.center_y, bar_z))
+             c_bot = self.project3D((g.x, g.center_y, bar_z + pc.GATE_DIVIDER_HEIGHT))
+             if c_bar and c_bot:
+                 avg_dist = (c_bar[2] + c_bot[2]) / 2
+                 drawable.append((avg_dist, 'line', GRAY, c_bar[:2], c_bot[:2], 4))
+
+             pic_hw = pc.GATE_PICTURE_WIDTH / 2
+             for side in (-1, 1):
+                 py = g.center_y + side * pc.GATE_PICTURE_OFFSET_FRAC * half_w
+                 tl = self.project3D((g.x, py - pic_hw, bar_z))
+                 tr = self.project3D((g.x, py + pic_hw, bar_z))
+                 br = self.project3D((g.x, py + pic_hw, bar_z + pc.GATE_PICTURE_HEIGHT))
+                 bl = self.project3D((g.x, py - pic_hw, bar_z + pc.GATE_PICTURE_HEIGHT))
+                 if tl and tr and br and bl:
+                     avg_dist = (tl[2] + tr[2] + br[2] + bl[2]) / 4
+                     drawable.append((avg_dist, 'polygon', GATE_PICTURE_COLOR,
+                                      [tl[:2], tr[:2], br[:2], bl[:2]], 0))
 
         if self.prequal_marker:
              m = self.prequal_marker
@@ -295,6 +373,17 @@ class SubmarineSimulator:
         corners = [(-pvc_s,-pvc_s), (pvc_s,-pvc_s), (pvc_s,pvc_s), (-pvc_s,pvc_s)]; rotated = [(subPos[0]+dx*cos_h-dy*sin_h, subPos[1]-(dx*sin_h+dy*cos_h)) for dx,dy in corners]; pygame.draw.polygon(self.screen,YELLOW,rotated,4)
         box_w,box_l=0.127*self.scaleY/2,self.config.submarineLength*self.scaleX/2; box_corners=[(-box_l,-box_w),(box_l,-box_w),(box_l,box_w),(-box_l,box_w)]; rotated_box=[(subPos[0]+dx*cos_h-dy*sin_h,subPos[1]-(dx*sin_h+dy*cos_h)) for dx,dy in box_corners]; pygame.draw.polygon(self.screen,CONTROL_BOX_GRAY,rotated_box)
         arrow_pts = [(box_l,-box_w),(box_l,box_w),(box_l+0.2*self.scaleX,0)]; rotated_arrow=[(subPos[0]+dx*cos_h-dy*sin_h, subPos[1]-(dx*sin_h+dy*cos_h)) for dx,dy in arrow_pts]; pygame.draw.polygon(self.screen, YELLOW, rotated_arrow)
+        # Roll gauge: the top-down view is a bird's-eye projection and can't
+        # otherwise show rotation about the forward axis, so a barrel roll
+        # was invisible here even though it was happening correctly in
+        # physics. A small dial next to the sub makes it visible: the red
+        # dot orbits the circle once per 360 degrees of roll.
+        gauge_r = 18; gauge_cx, gauge_cy = subPos[0], subPos[1] - 45
+        pygame.draw.circle(self.screen, WHITE, (int(gauge_cx), int(gauge_cy)), gauge_r, 1)
+        roll_rad = math.radians(self.subPhysics.roll)
+        dot_x = gauge_cx + gauge_r * math.sin(roll_rad)
+        dot_y = gauge_cy - gauge_r * math.cos(roll_rad)
+        pygame.draw.circle(self.screen, RED, (int(dot_x), int(dot_y)), 4)
         self._renderUi(); scaled_camera = pygame.transform.scale(self.cameraSurface, (400, 300)); self.screen.blit(scaled_camera, (self.width-420, 20)); pygame.draw.rect(self.screen, BLACK, (self.width-420, 20, 400, 300), 2); pygame.display.flip()
 
     def _drawThrusterBar(self, x, y, label, value):

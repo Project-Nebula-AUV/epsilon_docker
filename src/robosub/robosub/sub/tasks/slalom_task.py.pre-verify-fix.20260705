@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""
+Slalom task: navigate a lane of red/white pole gatelets, ported from the
+desktop RoboSim full course to the epsilon task architecture.
+
+Unlike the subtask-list tasks (GateTask), the slalom loops (SEARCH -> ALIGN ->
+APPROACH -> CLEAR -> SEARCH...) until it runs out of gatelets, so it is a
+custom state-machine Task like StabilizeTask, not a subtask sequence.
+
+Pass-side coordination: the forward task observes which side of the red pole
+it passed (red in right half of frame => pass left, and vice versa) and the
+reversed task (constructed with partner=<forward task>) takes the opposite
+side and the reciprocal course heading — same contract as RoboSim, but wired
+through an explicit partner reference instead of Submarine bookkeeping.
+
+Safety: a global timeout forces COMPLETED (never FAILED) so a slalom the sub
+cannot finish never strands the mission.
+"""
+import math
+from enum import Enum, auto
+from typing import Optional, Tuple
+
+import numpy as np
+
+from robosub.sub.tasks.task_base import Task, TaskStatus
+from robosub.sub.data_structures import SensorSuite, Vision, ThrusterCommands
+from robosub.sub.config import SimulationConfig
+from robosub.sub.utils import angle_diff
+
+
+class SlalomState(Enum):
+    DIVING = auto()
+    SEARCHING = auto()
+    ALIGNING = auto()
+    APPROACH = auto()
+    CLEAR = auto()
+    REALIGNING = auto()
+
+
+class SlalomTask(Task):
+    """Repeated gatelet passes along a course axis; completes on REALIGNING
+    once no further gatelets are found."""
+
+    def __init__(self, target_depth: float = 1.0,
+                 reversed: bool = False,
+                 partner: Optional['SlalomTask'] = None,
+                 forced_side: Optional[str] = None,
+                 surge_power: float = 0.35,
+                 clear_duration: float = 1.5,
+                 task_timeout: float = 180.0):
+        self.target_depth = target_depth
+        self.reversed = reversed
+        self.partner = partner            # forward task, for reversed runs
+        # Carry over a side committed to upstream (e.g. by the gate) instead
+        # of guessing independently from whichever gatelet is seen first.
+        # Ignored on the reversed leg, which always takes the partner's
+        # opposite side (set in on_enter once the partner has run).
+        self.forced_side = forced_side
+        self.SURGE_POWER = surge_power
+        self.CLEAR_DURATION = clear_duration
+        self.TASK_TIMEOUT = task_timeout
+        self.ALIGN_HEADING_TOL_DEG = 3.0
+        self.ALIGN_CENTER_FRACTION = 0.08   # of image width
+        self.SWAY_P_GAIN = 1.0
+        self.LOST_TO_CLEAR_S = 0.75         # gatelet gone this long in APPROACH => passed it
+        self.NO_GATELET_TO_REALIGN_S = 1.5  # nothing seen this long in SEARCHING => course done
+        super().__init__()
+        self.reset()
+
+    def reset(self, search_direction: int = 1):
+        super().reset(search_direction)
+        self.state = SlalomState.DIVING
+        self.align_phase = 'YAW'
+        self.course_axis_heading: Optional[float] = None
+        self.pass_side: Optional[str] = self.forced_side
+        self.passes_completed = 0
+        self.state_timer = 0.0
+        self.task_timer = 0.0
+        self.time_since_gatelet = 0.0
+        self.context['target_depth'] = self.target_depth
+
+    def on_enter(self, sub: 'Submarine', sensors: SensorSuite, vision_data: Vision, context):
+        if self.reversed:
+            if self.partner is not None and self.partner.course_axis_heading is not None:
+                self.course_axis_heading = (self.partner.course_axis_heading + 180.0) % 360.0
+                if self.partner.pass_side:
+                    self.pass_side = ('right' if self.partner.pass_side == 'left' else 'left')
+            else:
+                self.course_axis_heading = sensors.heading  # already turned around
+        else:
+            self.course_axis_heading = sensors.heading
+        print(f"INFO: SlalomTask starting (reversed={self.reversed}, "
+              f"axis={self.course_axis_heading:.0f} deg, side={self.pass_side})")
+
+    @property
+    def state_name(self) -> str:
+        s = self.state.name
+        if self.state == SlalomState.ALIGNING:
+            s = f"ALIGNING({self.align_phase})"
+        return f"{s} pass={self.passes_completed} side={self.pass_side or '?'}"
+
+    def _gatelet_center_x(self, gatelet) -> float:
+        return (gatelet[0]['center_x'] + gatelet[1]['center_x']) / 2.0
+
+    def _heading_cmds(self, sub: 'Submarine', sensors: SensorSuite,
+                      target_heading: float, surge: float = 0.0,
+                      sway: float = 0.0) -> ThrusterCommands:
+        """Heading hold that can also actually TURN. The shared hover yaw gain
+        (err_rad * 0.02 against gyro damping * 3.0) converges a large error at
+        ~0.07 deg/s — useless for the reversed leg's 180-degree turn-around.
+        For pure turns use a stronger P with lighter damping: saturates for
+        big errors, no dead zone near the tolerance."""
+        if surge == 0.0 and sway == 0.0:
+            err_rad = math.radians(angle_diff(target_heading, sensors.heading))
+            yaw = float(np.clip(1.5 * err_rad - sensors.imu.gyro_z * 1.0, -1.0, 1.0))
+            heave, roll = sub.get_depth_roll_commands(sensors, self.target_depth)
+            return sub._mix_and_normalize_commands(0.0, 0.0, yaw, heave, roll)
+        return sub.get_heading_commands(sensors, target_heading, surge_power=surge,
+                                        sway_power=sway, target_depth=self.target_depth)
+
+    def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite,
+                vision_data: Vision, config: SimulationConfig
+                ) -> Tuple[TaskStatus, ThrusterCommands]:
+        if self.course_axis_heading is None:
+            self.on_enter(sub, sensors, vision_data, self.context)
+
+        self.task_timer += dt
+        if self.task_timer > self.TASK_TIMEOUT:
+            print(f"WARN: SlalomTask timed out after {self.passes_completed} passes — completing anyway")
+            return TaskStatus.COMPLETED, sub._get_damping_commands(sensors)
+
+        cam_w = sensors.camera_image.shape[1]
+
+        if self.state == SlalomState.DIVING:
+            # Gate on heading too: the reversed leg starts facing the wrong
+            # way and must complete its 180-degree turn BEFORE searching,
+            # otherwise SEARCHING sees no poles (they are behind) and the
+            # task realigns straight to completion with zero passes.
+            heading_ok = abs(angle_diff(self.course_axis_heading, sensors.heading)) < 10.0
+            if abs(self.target_depth - sensors.depth) < 0.2 and heading_ok:
+                self.state = SlalomState.SEARCHING
+                self.time_since_gatelet = 0.0
+            return TaskStatus.RUNNING, self._heading_cmds(sub, sensors, self.course_axis_heading)
+
+        if self.state == SlalomState.SEARCHING:
+            gatelet = vision_data.get_slalom_gatelet()
+            if gatelet:
+                if self.pass_side is None:
+                    red = gatelet[0]
+                    self.pass_side = 'left' if red['center_x'] > cam_w / 2 else 'right'
+                    print(f"INFO: Slalom pass side chosen: {self.pass_side}")
+                self.time_since_gatelet = 0.0
+                self.state = SlalomState.ALIGNING
+                self.align_phase = 'YAW'
+                return TaskStatus.RUNNING, sub._get_damping_commands(sensors)
+            self.time_since_gatelet += dt
+            if self.time_since_gatelet > self.NO_GATELET_TO_REALIGN_S:
+                self.state = SlalomState.REALIGNING
+            return TaskStatus.RUNNING, self._heading_cmds(sub, sensors, self.course_axis_heading)
+
+        if self.state == SlalomState.ALIGNING:
+            if self.align_phase == 'YAW':
+                if abs(angle_diff(self.course_axis_heading, sensors.heading)) < self.ALIGN_HEADING_TOL_DEG:
+                    self.align_phase = 'SWAY'
+                return TaskStatus.RUNNING, self._heading_cmds(sub, sensors, self.course_axis_heading)
+            # SWAY: centre the gatelet with lateral translation, heading held square
+            gatelet = vision_data.get_slalom_gatelet(self.pass_side)
+            if not gatelet:
+                self.time_since_gatelet += dt
+                if self.time_since_gatelet > 2.0:
+                    self.state = SlalomState.SEARCHING
+                    self.time_since_gatelet = 0.0
+                return TaskStatus.RUNNING, sub._get_damping_commands(sensors)
+            self.time_since_gatelet = 0.0
+            pixel_error = self._gatelet_center_x(gatelet) - cam_w / 2
+            if abs(pixel_error) < cam_w * self.ALIGN_CENTER_FRACTION:
+                self.state = SlalomState.APPROACH
+                return TaskStatus.RUNNING, sub._get_damping_commands(sensors)
+            sway_cmd = float(np.clip(-(pixel_error / (cam_w / 2)) * self.SWAY_P_GAIN, -1.0, 1.0))
+            return TaskStatus.RUNNING, sub.get_heading_commands(
+                sensors, self.course_axis_heading, sway_power=sway_cmd,
+                target_depth=self.target_depth)
+
+        if self.state == SlalomState.APPROACH:
+            gatelet = vision_data.get_slalom_gatelet(self.pass_side)
+            if gatelet:
+                self.time_since_gatelet = 0.0
+                nav_x = self._gatelet_center_x(gatelet)
+                return TaskStatus.RUNNING, sub.get_go_to_visual_target_commands(
+                    sensors, nav_x, self.SURGE_POWER, target_depth=self.target_depth)
+            self.time_since_gatelet += dt
+            if self.time_since_gatelet > self.LOST_TO_CLEAR_S:
+                self.state = SlalomState.CLEAR
+                self.state_timer = 0.0
+                self.time_since_gatelet = 0.0
+            return TaskStatus.RUNNING, sub.get_heading_commands(
+                sensors, self.course_axis_heading, surge_power=self.SURGE_POWER,
+                target_depth=self.target_depth)
+
+        if self.state == SlalomState.CLEAR:
+            self.state_timer += dt
+            if self.state_timer > self.CLEAR_DURATION:
+                self.passes_completed += 1
+                self.state = SlalomState.SEARCHING
+                self.time_since_gatelet = 0.0
+            return TaskStatus.RUNNING, sub.get_heading_commands(
+                sensors, self.course_axis_heading, surge_power=self.SURGE_POWER,
+                target_depth=self.target_depth)
+
+        if self.state == SlalomState.REALIGNING:
+            if abs(angle_diff(self.course_axis_heading, sensors.heading)) < 8.0:
+                print(f"INFO: SlalomTask complete ({self.passes_completed} passes, "
+                      f"reversed={self.reversed})")
+                return TaskStatus.COMPLETED, sub._get_damping_commands(sensors)
+            return TaskStatus.RUNNING, self._heading_cmds(sub, sensors, self.course_axis_heading)
+
+        return TaskStatus.RUNNING, ThrusterCommands()

@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""
-Sweep task: yaw back and forth at depth until a slalom gatelet (red+white
-pole pair) is in view, then stop turned toward it. Ported from RoboSim.
+"""Sweep task: bounded yaw sweep at depth until a slalom gatelet is in view.
 
-Runs between the gate and the slalom so SlalomTask starts with poles visible
-and latches its course axis pointed at the first gatelet. Bounded sweep keeps
-the gate behind the sub out of the camera. Timeout COMPLETES (never fails):
-the slalom's own search logic is the fallback.
+Runs between the gate and the slalom so SlalomTask starts with poles visible.
+The sweep is centered on the COURSE AXIS (mission reference heading), not on
+whatever heading the previous task ended at, and is bounded so the gate
+behind the vehicle never enters the camera. Timeout completes — the slalom's
+own search is the fallback.
 """
-import math
 from typing import Optional, Tuple
 
 import numpy as np
@@ -21,61 +19,65 @@ from robosub.sub.utils import angle_diff
 
 class SweepForSlalomTask(Task):
 
-    def __init__(self, target_depth: float = 1.0,
-                 sweep_command: float = 0.18,
+    def __init__(self, target_depth: float = 1.5,
+                 sweep_rate: float = 0.25,
                  max_sweep_degrees: float = 50.0,
                  confirm_ticks: int = 8,
-                 timeout: float = 30.0):
+                 timeout: float = 40.0):
         self.target_depth = target_depth
-        self.SWEEP_COMMAND = sweep_command
+        self.SWEEP_RATE = sweep_rate          # rad/s commanded scan rate
         self.MAX_SWEEP_DEGREES = max_sweep_degrees
         self.CONFIRM_TICKS = confirm_ticks
         self.TIMEOUT = timeout
+        self._center: Optional[float] = None
+        self._direction = 1
+        self._seen = 0
+        self._elapsed = 0.0
         super().__init__()
-        self.reset()
 
-    def reset(self, search_direction: int = 1):
+    def reset(self, search_direction=None):
         super().reset(search_direction)
-        self.center_heading: Optional[float] = None
-        self.direction = 1
-        self.seen_ticks = 0
-        self.elapsed = 0.0
+        self._center = None
+        self._direction = 1
+        self._seen = 0
+        self._elapsed = 0.0
         self.context['target_depth'] = self.target_depth
 
     @property
     def state_name(self) -> str:
-        return f"SWEEPING (seen {self.seen_ticks}/{self.CONFIRM_TICKS})"
+        return f"SWEEPING (seen {self._seen}/{self.CONFIRM_TICKS})"
 
     def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite,
-                vision_data: Vision, config: SimulationConfig
+                vision: Vision, config: SimulationConfig
                 ) -> Tuple[TaskStatus, ThrusterCommands]:
-        if self.center_heading is None:
-            self.center_heading = sensors.heading
-        self.elapsed += dt
+        if self._center is None:
+            if sub.shared.reference_heading is None:
+                # No gate leg ran before us (slalom test mode): the heading
+                # at sweep start IS the course axis — lock it for the slalom.
+                sub.shared.reference_heading = sensors.heading
+                print(f"INFO: course reference locked at sweep start "
+                      f"({sensors.heading:.1f} deg)")
+            self._center = sub.shared.reference_heading
+        self._elapsed += dt
 
-        if vision_data.get_slalom_gatelet() is not None:
-            self.seen_ticks += 1
-            if self.seen_ticks >= self.CONFIRM_TICKS:
-                print("INFO: Sweep found slalom gatelet — done")
-                return TaskStatus.COMPLETED, sub._get_damping_commands(sensors)
-        else:
-            self.seen_ticks = 0
+        if vision.get_slalom_gatelet() is not None:
+            self._seen += 1
+            cmds = sub.ctrl.hold(sensors, dt, self.target_depth)
+            if self._seen >= self.CONFIRM_TICKS:
+                print("INFO: Sweep found slalom gatelet")
+                return TaskStatus.COMPLETED, cmds
+            return TaskStatus.RUNNING, cmds
+        self._seen = 0
 
-        if self.elapsed > self.TIMEOUT:
-            print("WARN: Sweep timed out without a gatelet — completing anyway")
-            return TaskStatus.COMPLETED, sub._get_damping_commands(sensors)
+        if self._elapsed > self.TIMEOUT:
+            print("WARN: Sweep TIMEOUT without a gatelet — completing (valve)")
+            return TaskStatus.COMPLETED, sub.ctrl.hold(sensors, dt,
+                                                       self.target_depth)
 
-        rel = angle_diff(sensors.heading, self.center_heading)
+        rel = angle_diff(sensors.heading, self._center)
         if rel > self.MAX_SWEEP_DEGREES:
-            self.direction = -1
+            self._direction = -1
         elif rel < -self.MAX_SWEEP_DEGREES:
-            self.direction = 1
-
-        if self.seen_ticks > 0:
-            # brake the turn while confirming the sighting
-            yaw = float(np.clip(-sensors.imu.gyro_z * sub.YAW_D_GAIN, -1.0, 1.0))
-        else:
-            yaw = self.SWEEP_COMMAND * self.direction
-
-        heave, roll = sub.get_depth_roll_commands(sensors, self.target_depth)
-        return TaskStatus.RUNNING, sub._mix_and_normalize_commands(0.0, 0.0, yaw, heave, roll)
+            self._direction = 1
+        return TaskStatus.RUNNING, sub.ctrl.scan(
+            sensors, dt, self.target_depth, self.SWEEP_RATE * self._direction)

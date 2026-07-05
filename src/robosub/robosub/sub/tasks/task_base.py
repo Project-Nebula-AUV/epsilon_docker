@@ -1,108 +1,103 @@
 #!/usr/bin/env python3
-"""
-Base class definition for all autonomous mission tasks.
-Includes subtask execution logic with a shared context.
-Handles subtask failure by restarting the task sequence.
-Allows tasks to specify search direction on restart.
-"""
-from enum import Enum, auto
-from typing import Tuple, List, Dict, Any
+"""Mission task engine.
 
-# --- Import Vision class instead of VisionData ---
+A Task is an ordered list of Subtasks (or a subclass overriding execute()
+with its own state machine). The engine guarantees:
+
+  * no zero-thrust ticks: when a subtask completes, the next one runs in the
+    SAME tick (bounded chain), so control — including depth hold — is never
+    dropped across a transition;
+  * instance-owned state: nothing mutable lives on the class;
+  * search_direction given at construction survives reset() (Submarine resets
+    every task at mission start);
+  * subtask timeouts are counted and surface persistently in state_name as
+    'T!n' so a run that bailed through safety valves is distinguishable from
+    a clean one.
+
+Cross-task navigation references (course axis, committed gate side, slalom
+side) live on MissionShared, owned by Submarine — typed, in one place,
+instead of stringly-typed context keys leaking between tasks.
+"""
+from dataclasses import dataclass
+from enum import Enum, auto
+from typing import Tuple, List, Dict, Any, Optional
+
 from robosub.sub.data_structures import SensorSuite, Vision, ThrusterCommands
-# ---
 from robosub.sub.config import SimulationConfig
-from robosub.sub.tasks.subtask_base import Subtask, SubtaskStatus # Keep this import
-# --- NO IMPORT from common_subtasks here ---
+from robosub.sub.tasks.subtask_base import Subtask, SubtaskStatus
+
 
 class TaskStatus(Enum):
     RUNNING = auto()
     COMPLETED = auto()
-    FAILED = auto() # Propagated up if task cannot recover
+    FAILED = auto()
+
+
+@dataclass
+class MissionShared:
+    """Navigation references shared across tasks for one mission run."""
+    reference_heading: Optional[float] = None  # course axis = gate normal (deg)
+    committed_side: Optional[str] = None       # gate half committed to
+    slalom_side: Optional[str] = None          # side of red poles, outbound
+    slalom_axis: Optional[float] = None        # outbound slalom heading (deg)
+    slalom_passes_out: int = 0
+    slalom_passes_back: int = 0
+
 
 class Task:
-    """Base class for a mission task with subtask execution."""
-    subtasks: List[Subtask] = []
-    current_subtask_index: int = 0
-    DEFAULT_SEARCH_TURN_POWER = 0.25
-    context: Dict[str, Any] = {}
-    search_direction: int = 1
-    target_depth: float = 0.1
+    CHAIN_LIMIT = 4   # max subtask advances within one tick
 
-    def reset(self, search_direction: int = 1):
+    def __init__(self, subtasks: Optional[List[Subtask]] = None,
+                 search_direction: int = 1):
+        self.subtasks: List[Subtask] = list(subtasks or [])
+        self._ctor_search_direction = search_direction
         self.current_subtask_index = 0
-        self.context = {}
+        self.context: Dict[str, Any] = {}
         self.search_direction = search_direction
-        if not 'target_depth' in self.context:
-            self.context['target_depth'] = getattr(self, 'target_depth', 0.1)
-        for subtask in self.subtasks:
-             if hasattr(subtask, '_has_entered'): delattr(subtask, '_has_entered')
-             if hasattr(subtask, 'reset'): subtask.reset()
+        self._timeout_count = 0
+        self.reset()
+
+    def reset(self, search_direction: Optional[int] = None):
+        self.current_subtask_index = 0
+        self.search_direction = (search_direction if search_direction is not None
+                                 else self._ctor_search_direction)
+        self.context = {
+            'target_depth': getattr(self, 'target_depth', 0.1),
+            'search_direction': self.search_direction,
+        }
+        self._timeout_count = 0
+        for st in self.subtasks:
+            st.reset()
 
     @property
     def state_name(self) -> str:
+        suffix = f" T!{self._timeout_count}" if self._timeout_count else ""
         if self.subtasks and 0 <= self.current_subtask_index < len(self.subtasks):
-            subtask_name = self.subtasks[self.current_subtask_index].name
-            if hasattr(self.subtasks[self.current_subtask_index], 'get_dynamic_name'):
-                subtask_name = self.subtasks[self.current_subtask_index].get_dynamic_name(self.context)
-            return f"{self.__class__.__name__}[{self.current_subtask_index}]:{subtask_name}"
-        return self.__class__.__name__
+            st = self.subtasks[self.current_subtask_index]
+            return (f"{self.__class__.__name__}[{self.current_subtask_index}]"
+                    f":{st.get_dynamic_name(self.context)}{suffix}")
+        return self.__class__.__name__ + suffix
 
-    # --- USE STRING HINT 'Submarine' ---
     def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite,
-                vision_data: Vision,
+                vision: Vision,
                 config: SimulationConfig) -> Tuple[TaskStatus, ThrusterCommands]:
-        if not self.subtasks: return TaskStatus.COMPLETED, ThrusterCommands()
-        if self.current_subtask_index >= len(self.subtasks): return TaskStatus.COMPLETED, ThrusterCommands()
-
-        processed_vision_data = vision_data
-        current_subtask = self.subtasks[self.current_subtask_index]
-
-        if not hasattr(current_subtask, '_has_entered'):
-             current_subtask.on_enter(sub, sensors, processed_vision_data, self.context)
-             current_subtask._has_entered = True
-
-        subtask_status, commands = current_subtask.execute(sub, dt, sensors, processed_vision_data, config, self.context)
-
-        # --- Check class name string ---
-        # Spin keyed to the subtask's OWN target type: a 'gate' search must
-        # keep spinning even while an (irrelevant) pole is visible, otherwise
-        # a visible white pole with the gate out of view = hover deadlock.
-        if current_subtask.__class__.__name__ == 'WaitForTargetVisible' and subtask_status == SubtaskStatus.RUNNING:
-             tt = getattr(current_subtask, 'target_type', 'either')
-             if tt == 'gate':
-                 target_visible = processed_vision_data.is_gate_visible()
-             elif tt == 'pole':
-                 target_visible = processed_vision_data.is_pole_visible()
-             else:
-                 target_visible = (processed_vision_data.is_pole_visible()
-                                   or processed_vision_data.is_gate_visible())
-             if not target_visible:
-                 spin_yaw = self.DEFAULT_SEARCH_TURN_POWER * -self.search_direction
-                 commands.hfl += spin_yaw; commands.hfr -= spin_yaw;
-                 commands.hal += spin_yaw; commands.har -= spin_yaw;
-                 max_abs = max(1.0, abs(commands.hfl), abs(commands.hfr), abs(commands.hal), abs(commands.har))
-                 if max_abs > 1.0:
-                    commands.hfl /= max_abs; commands.hfr /= max_abs;
-                    commands.hal /= max_abs; commands.har /= max_abs;
-
-        if subtask_status == SubtaskStatus.COMPLETED:
-            current_subtask.on_exit(sub, sensors, processed_vision_data, self.context)
-            delattr(current_subtask, '_has_entered')
-            self.current_subtask_index += 1
+        commands = None
+        for _ in range(self.CHAIN_LIMIT):
             if self.current_subtask_index >= len(self.subtasks):
-                is_empty_command = (commands == ThrusterCommands())
-                final_commands = sub._get_damping_commands(sensors) if is_empty_command else commands
-                return TaskStatus.COMPLETED, final_commands
-            else:
-                 next_subtask = self.subtasks[self.current_subtask_index]
-                 next_subtask.on_enter(sub, sensors, processed_vision_data, self.context)
-                 next_subtask._has_entered = True
-                 return TaskStatus.RUNNING, ThrusterCommands()
-        elif subtask_status == SubtaskStatus.FAILED:
-            print(f"ERROR: Subtask {current_subtask.name} FAILED in task {self.__class__.__name__}")
-            current_subtask.on_exit(sub, sensors, processed_vision_data, self.context)
-            if hasattr(current_subtask, '_has_entered'):
-                delattr(current_subtask, '_has_entered')
-            return TaskStatus.FAILED, sub._get_damping_commands(sensors)
+                return TaskStatus.COMPLETED, (
+                    commands if commands is not None else
+                    sub.ctrl.hold(sensors, dt,
+                                  self.context.get('target_depth', sensors.depth)))
+            st = self.subtasks[self.current_subtask_index]
+            status, commands = st.tick(sub, dt, sensors, vision, config,
+                                       self.context)
+            if st.timed_out:
+                self._timeout_count += 1
+            if status == SubtaskStatus.RUNNING:
+                return TaskStatus.RUNNING, commands
+            if status == SubtaskStatus.FAILED:
+                print(f"ERROR: subtask {st.name} FAILED in "
+                      f"{self.__class__.__name__}")
+                return TaskStatus.FAILED, commands
+            self.current_subtask_index += 1
         return TaskStatus.RUNNING, commands
