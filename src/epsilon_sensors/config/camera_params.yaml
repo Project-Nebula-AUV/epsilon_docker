@@ -1,0 +1,41 @@
+# camera_params.yaml — Arducam OV9782 startup parameters
+#
+# Pass to the node with:
+#   ros2 run <pkg> camera_input --ros-args --params-file camera_params.yaml
+#
+# The TUI tool (camera_controls_tui.py) reads and writes this file.
+# Changes saved in the TUI are applied live via /camera/controls and
+# persisted here so the next run starts with the same settings.
+
+camera_input:
+  ros__parameters:
+
+    # ── Camera device ────────────────────────────────────────────────────
+    device:   0          # /dev/videoN index
+    width:    1280
+    height:   720
+    fps:      30.0
+    frame_id: camera
+
+    # ── White balance ────────────────────────────────────────────────────
+    # auto_wb is ignored when wb_temperature >= 0 (manual mode).
+    auto_wb:        true
+    wb_temperature: -1   # -1 = use auto_wb; >=0 = manual Kelvin (e.g. 5500)
+
+    # ── Exposure ─────────────────────────────────────────────────────────
+    # auto_exposure is ignored when exposure >= 0 (manual mode).
+    auto_exposure: true
+    exposure:      -1    # -1 = use auto_exposure; >=0 = 100 µs units (e.g. 150)
+
+    # ── V4L2 scalar controls ─────────────────────────────────────────────
+    # Set to -1 to leave the camera driver default unchanged.
+    saturation: -1
+    gain:       -1
+    brightness: -1
+    contrast:   -1
+    sharpness:  -1
+
+    # ── Software ─────────────────────────────────────────────────────────
+    # Per-frame gray-world white balance (removes global colour casts).
+    # Robust on the bench; may amplify noise in low-light / underwater.
+    gray_world: false

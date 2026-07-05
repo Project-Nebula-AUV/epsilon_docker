@@ -65,8 +65,19 @@ class Task:
         subtask_status, commands = current_subtask.execute(sub, dt, sensors, processed_vision_data, config, self.context)
 
         # --- Check class name string ---
+        # Spin keyed to the subtask's OWN target type: a 'gate' search must
+        # keep spinning even while an (irrelevant) pole is visible, otherwise
+        # a visible white pole with the gate out of view = hover deadlock.
         if current_subtask.__class__.__name__ == 'WaitForTargetVisible' and subtask_status == SubtaskStatus.RUNNING:
-             if not (processed_vision_data.is_pole_visible() or processed_vision_data.is_gate_visible()):
+             tt = getattr(current_subtask, 'target_type', 'either')
+             if tt == 'gate':
+                 target_visible = processed_vision_data.is_gate_visible()
+             elif tt == 'pole':
+                 target_visible = processed_vision_data.is_pole_visible()
+             else:
+                 target_visible = (processed_vision_data.is_pole_visible()
+                                   or processed_vision_data.is_gate_visible())
+             if not target_visible:
                  spin_yaw = self.DEFAULT_SEARCH_TURN_POWER * -self.search_direction
                  commands.hfl += spin_yaw; commands.hfr -= spin_yaw;
                  commands.hal += spin_yaw; commands.har -= spin_yaw;

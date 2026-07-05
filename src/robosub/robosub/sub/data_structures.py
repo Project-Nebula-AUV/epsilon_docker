@@ -136,11 +136,33 @@ class Vision:
 
     # --- Red poles (gate) ---
 
+    def _is_slalom_red(self, r: Dict) -> bool:
+        """A red pole with a white pole beside it at similar bottom height AND
+        similar size is a slalom gatelet red, NOT a gate pole. Without this
+        exclusion, two slalom reds from different gatelets pair up as a
+        phantom gate and DriveUntilTargetLost keeps surging through the
+        slalom field. The size-ratio gate matters: a real gatelet's white is
+        at the same distance as its red (height ratio ~1), while a DISTANT
+        slalom white can coincidentally line up with a NEAR gate red's max_y
+        (seen at 1.5 m mission depth) — the 4x height difference is what
+        tells them apart."""
+        for w in self.green_blobs:
+            if w['height'] <= w['width'] * 1.2:
+                continue
+            ratio = w['height'] / max(r['height'], 1)
+            if not (0.5 <= ratio <= 2.0):
+                continue
+            if (abs(r['max_y'] - w['max_y']) < max(r['height'], w['height']) * 0.6
+                    and abs(r['center_x'] - w['center_x']) < 2.5 * max(r['height'], w['height'])):
+                return True
+        return False
+
     def get_gate_pair(self) -> Optional[Tuple[Dict, Dict]]:
         if not self._found_best_gate_pair:
             self._found_best_gate_pair = True
             candidates = [b for b in self.red_blobs
-                          if b['height'] > b['width'] * 1.5]
+                          if b['height'] > b['width'] * 1.5
+                          and not self._is_slalom_red(b)]
             if len(candidates) < 2:
                 self._best_gate_pair = None
             else:
@@ -165,6 +187,39 @@ class Vision:
         pair = self.get_gate_pair()
         return ((pair[0]['center_x'] + pair[1]['center_x']) / 2
                 if pair else None)
+
+    # --- Slalom gatelets (one red pole + one white pole at similar height) ---
+    # White poles reuse the green_blobs channel: GREEN_HSV_RANGE is currently
+    # set to white in config.py ("TEMPORARILY WHITE for this course").
+
+    def get_slalom_gatelet(self, pass_side: Optional[str] = None
+                           ) -> Optional[Tuple[Dict, Dict]]:
+        """
+        Closest (lowest-in-image) red+white pole pair whose bottoms are at a
+        similar image height. pass_side 'left'/'right' additionally requires
+        the white pole on that side of the red pole. Returns (red, white).
+        """
+        reds = [b for b in self.red_blobs if b['height'] > b['width'] * 1.2]
+        whites = [b for b in self.green_blobs if b['height'] > b['width'] * 1.2]
+        best, best_y = None, -1.0
+        for r in reds:
+            for w in whites:
+                if abs(r['max_y'] - w['max_y']) > max(r['height'], w['height']) * 0.6:
+                    continue
+                if pass_side == 'left' and w['center_x'] >= r['center_x']:
+                    continue
+                if pass_side == 'right' and w['center_x'] <= r['center_x']:
+                    continue
+                pair_y = max(r['max_y'], w['max_y'])
+                # prefer the closest pair; tie-break on white nearest the red
+                if pair_y > best_y or (pair_y == best_y and best is not None
+                                       and abs(w['center_x'] - r['center_x'])
+                                       < abs(best[1]['center_x'] - best[0]['center_x'])):
+                    best, best_y = (r, w), pair_y
+        return best
+
+    def is_slalom_visible(self, pass_side: Optional[str] = None) -> bool:
+        return self.get_slalom_gatelet(pass_side) is not None
 
 
 @dataclass

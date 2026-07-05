@@ -4,7 +4,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.executors import ExternalShutdownException
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, Bool
 from geometry_msgs.msg import Twist
 
 
@@ -58,6 +58,11 @@ class SensorBridge(Node):
         # trim (the ~0.6 heave the integrator can no longer supply) is handled by
         # thruster_bridge's heave_bias param. -1.0 disables (real /depth passthrough).
         self.synthetic_depth = float(self.declare_parameter('synthetic_depth', -1.0).value)
+        # /sensors/depth health: False if depth_fusion flags stale OR no /depth
+        # has arrived within this window (fusion node died entirely). In
+        # synthetic-depth mode the constant is trustworthy by construction, so
+        # depth_ok is always True there.
+        self.depth_ok_max_age = float(self.declare_parameter('depth_ok_max_age_s', 1.5).value)
         # _roll_offset is the active offset (deg). None => still capturing at boot.
         self._roll_offset = None if self.capture_level_on_start else self.roll_offset_deg
         self._cap_samples = []
@@ -70,10 +75,25 @@ class SensorBridge(Node):
         self.pub_depth = self.create_publisher(Float32, '/sensors/depth', qos)
         self.pub_imu = self.create_publisher(Imu, '/sensors/imu', qos)
         self.pub_vel = self.create_publisher(Twist, '/sensors/velocity', qos)
+        self.pub_depth_ok = self.create_publisher(Bool, '/sensors/depth_ok', qos)
+
+        # Depth-health inputs: fusion's own stale flag + the freshness of /depth
+        # itself. Both default to "not ok" until proven fresh so a missing
+        # upstream reads as unhealthy, never as silently-good.
+        self._fusion_stale = True
+        self._last_depth_t = None
 
         self.create_subscription(Imu, '/imu', self.on_imu, 10)
         self.create_subscription(Float32, '/depth', self.on_depth, 10)
-        self.create_timer(0.05, self.on_velocity_timer)  # zeros, no DVL
+        self.create_subscription(Bool, '/depth_fusion/stale', self.on_fusion_stale, 10)
+        # Fused vertical velocity from depth_fusion: restores the nav depth
+        # PID's D-term and honest vertical completion gates. x/y stay zero
+        # (no DVL); falls back to all-zeros if the fusion stream goes stale.
+        self._fused_vz = 0.0
+        self._fused_vz_t = None
+        self.create_subscription(Float32, '/depth_fusion/velocity_z',
+                                 self.on_fused_vz, 10)
+        self.create_timer(0.05, self.on_velocity_timer)
         if self.synthetic_depth >= 0.0:
             self.create_timer(0.05, self.on_synthetic_depth_timer)  # 20 Hz constant
         mode = ('capture@boot %.1fs' % self.level_capture_secs
@@ -127,13 +147,34 @@ class SensorBridge(Node):
     def on_depth(self, msg):
         if self.synthetic_depth >= 0.0:
             return  # depth sensor bypassed; on_synthetic_depth_timer publishes instead
+        self._last_depth_t = self.get_clock().now()
         self.pub_depth.publish(Float32(data=float(msg.data)))
 
     def on_synthetic_depth_timer(self):
         self.pub_depth.publish(Float32(data=float(self.synthetic_depth)))
 
+    def on_fusion_stale(self, msg):
+        self._fusion_stale = bool(msg.data)
+
+    def on_fused_vz(self, msg):
+        self._fused_vz = float(msg.data)
+        self._fused_vz_t = self.get_clock().now()
+
+    def _depth_ok_now(self):
+        if self.synthetic_depth >= 0.0:
+            return True   # constant-hold depth is trustworthy by construction
+        if self._fusion_stale or self._last_depth_t is None:
+            return False
+        age = (self.get_clock().now() - self._last_depth_t).nanoseconds * 1e-9
+        return age <= self.depth_ok_max_age
+
     def on_velocity_timer(self):
-        self.pub_vel.publish(Twist())
+        t = Twist()
+        if (self._fused_vz_t is not None
+                and (self.get_clock().now() - self._fused_vz_t).nanoseconds * 1e-9 < 1.0):
+            t.linear.z = self._fused_vz   # m/s, down+ (nav convention)
+        self.pub_vel.publish(t)
+        self.pub_depth_ok.publish(Bool(data=bool(self._depth_ok_now())))
 
 
 def main(args=None):

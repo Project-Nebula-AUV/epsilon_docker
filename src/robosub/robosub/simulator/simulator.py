@@ -14,7 +14,7 @@ import numpy as np
 
 from robosub.sub.config import *
 from robosub.sub.world import SubmarinePhysicsState
-from robosub.sub.world import PrequalGate, PrequalMarker
+from robosub.sub.world import PrequalGate, PrequalMarker, SlalomPole
 # --- Import Vision ---
 from robosub.sub.data_structures import ThrusterCommands, MPU6050Readings, SensorSuite, Vision
 # ---
@@ -75,6 +75,28 @@ class SubmarineSimulator:
             z_bottom = self.config.worldDepth - 0.01,
             radius = self.prequal_config.MARKER_DIAMETER_METERS / 2, color = self.prequal_config.MARKER_COLOR
         )
+        # World matches the mission (same env var mission.py reads): the FULL
+        # course (default) replaces the orbit marker with a red/white slalom
+        # lane; ROBOSUB_MISSION=orbit keeps the legacy marker course.
+        self.slalom_poles = []
+        if os.environ.get('ROBOSUB_MISSION', '').lower() != 'orbit':
+            self.prequal_marker = None
+            gate_x = self.prequal_config.GATE_X_POS
+            spacing = 1.524            # white-red-white lateral spacing
+            wiggle = spacing * 0.25
+            last_y = self.config.worldHeight / 2
+            z_top = self.config.worldDepth - (0.9 + random.uniform(0.3, 0.6))
+            for i in range(3):
+                sx = gate_x + 8.0 + i * 4.0
+                y = last_y + random.uniform(-wiggle, wiggle) if i > 0 else last_y
+                y = float(np.clip(y, spacing * 2, self.config.worldHeight - spacing * 2))
+                last_y = y
+                self.slalom_poles += [
+                    SlalomPole(x=sx, y=y - spacing, z=z_top, color=WHITE),
+                    SlalomPole(x=sx, y=y,           z=z_top, color=RED),
+                    SlalomPole(x=sx, y=y + spacing, z=z_top, color=WHITE),
+                ]
+
         start_heading = 0
         start_depth = self.prequal_config.START_Z_POS
 
@@ -127,9 +149,16 @@ class SubmarineSimulator:
         drag_heave = -self.config.heaveDragCoeff * vel_heave * abs(vel_heave)
         drag_yaw   = -self.config.angularDragCoeff_Z * self.subPhysics.angular_velocity_z**2 * np.sign(self.subPhysics.angular_velocity_z)
         drag_roll  = -self.config.angularDragCoeff_X * self.subPhysics.angular_velocity_x**2 * np.sign(self.subPhysics.angular_velocity_x)
+        # Rotate body-frame sway/heave thrust through roll so thrusters on an
+        # inverted sub push the right way in the world frame (matters for the
+        # style-roll maneuver; identity when roll = 0).
+        r_rad = math.radians(self.subPhysics.roll)
+        cos_r, sin_r = math.cos(r_rad), math.sin(r_rad)
+        thrust_heave_w = thrust_sway * sin_r + thrust_heave * cos_r
+        thrust_sway_w  = thrust_sway * cos_r - thrust_heave * sin_r
         total_force_surge = thrust_surge + drag_surge
-        total_force_sway  = thrust_sway + drag_sway
-        total_force_heave = thrust_heave + drag_heave
+        total_force_sway  = thrust_sway_w + drag_sway
+        total_force_heave = thrust_heave_w + drag_heave
         total_torque_yaw  = thrust_yaw + drag_yaw
         total_torque_roll = thrust_roll + drag_roll
         fx = total_force_surge * cos_h - total_force_sway * sin_h
@@ -157,8 +186,11 @@ class SubmarineSimulator:
         self.subPhysics.y += self.subPhysics.velocity_y * dt
         self.subPhysics.z += self.subPhysics.velocity_z * dt
         self.subPhysics.heading = (self.subPhysics.heading + math.degrees(self.subPhysics.angular_velocity_z * dt)) % 360
-        self.subPhysics.roll = (self.subPhysics.roll + math.degrees(self.subPhysics.angular_velocity_x * dt))
-        self.subPhysics.roll = np.clip(self.subPhysics.roll, -90, 90)
+        # Wrap roll to ±180 (was clipped to ±90, which made full barrel rolls
+        # unrepresentable — needed for the style-roll maneuver).
+        self.subPhysics.roll = ((self.subPhysics.roll
+                                 + math.degrees(self.subPhysics.angular_velocity_x * dt)
+                                 + 180.0) % 360.0) - 180.0
         margin = 0.5
         self.subPhysics.x = np.clip(self.subPhysics.x, margin, self.config.worldWidth - margin)
         self.subPhysics.y = np.clip(self.subPhysics.y, margin, self.config.worldHeight - margin)
@@ -237,6 +269,13 @@ class SubmarineSimulator:
                  avg_dist = (tl[2] + bl[2]) / 2
                  drawable.append((avg_dist, 'line', m.color, tl[:2], bl[:2], 4))
 
+        # Slalom lane: bottom-anchored red/white poles (full-course world)
+        for pole in getattr(self, 'slalom_poles', []):
+             tp = self.project3D((pole.x, pole.y, pole.z))
+             bp = self.project3D((pole.x, pole.y, pole.z + pole.height))
+             if tp and bp:
+                 drawable.append(((tp[2] + bp[2]) / 2, 'line', pole.color, tp[:2], bp[:2], 5))
+
         drawable.sort(key=lambda x: x[0], reverse=True)
         for d in drawable:
              if d[1]=='line': pygame.draw.line(self.cameraSurface, d[2], d[3], d[4], d[5])
@@ -250,6 +289,8 @@ class SubmarineSimulator:
         pygame.draw.rect(self.screen, BLACK, (40,40,int(self.config.worldWidth*self.scaleX+20),int(self.config.worldHeight*self.scaleY+20)), 2)
         if self.prequal_gate: g = self.prequal_gate; p1 = self.worldToScreen(g.x, g.center_y - g.width / 2); p2 = self.worldToScreen(g.x, g.center_y + g.width / 2); pygame.draw.line(self.screen, g.color, p1, p2, 4)
         if self.prequal_marker: m = self.prequal_marker; pos_2d = self.worldToScreen(m.x, m.y); radius_scaled = max(2, int(m.radius * self.scaleX)); pygame.draw.circle(self.screen, m.color, pos_2d, radius_scaled); pygame.draw.circle(self.screen, BLACK, pos_2d, radius_scaled, 1)
+        for pole in getattr(self, 'slalom_poles', []):
+            pos_2d = self.worldToScreen(pole.x, pole.y); pygame.draw.circle(self.screen, pole.color, pos_2d, 4); pygame.draw.circle(self.screen, BLACK, pos_2d, 4, 1)
         subPos = self.worldToScreen(self.subPhysics.x, self.subPhysics.y); hRad, cos_h, sin_h = math.radians(self.subPhysics.heading), math.cos(math.radians(self.subPhysics.heading)), math.sin(math.radians(self.subPhysics.heading)); pvc_s = self.config.submarineWidth*self.scaleX/2
         corners = [(-pvc_s,-pvc_s), (pvc_s,-pvc_s), (pvc_s,pvc_s), (-pvc_s,pvc_s)]; rotated = [(subPos[0]+dx*cos_h-dy*sin_h, subPos[1]-(dx*sin_h+dy*cos_h)) for dx,dy in corners]; pygame.draw.polygon(self.screen,YELLOW,rotated,4)
         box_w,box_l=0.127*self.scaleY/2,self.config.submarineLength*self.scaleX/2; box_corners=[(-box_l,-box_w),(box_l,-box_w),(box_l,box_w),(-box_l,box_w)]; rotated_box=[(subPos[0]+dx*cos_h-dy*sin_h,subPos[1]-(dx*sin_h+dy*cos_h)) for dx,dy in box_corners]; pygame.draw.polygon(self.screen,CONTROL_BOX_GRAY,rotated_box)

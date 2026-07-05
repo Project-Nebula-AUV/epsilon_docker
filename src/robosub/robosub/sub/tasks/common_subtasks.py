@@ -373,17 +373,29 @@ class DriveUntilTargetLost(Subtask):
             else: return SubtaskStatus.FAILED, sub._get_damping_commands(sensors)
 
 class WaitForTargetVisible(Subtask):
-    def __init__(self, target_type='either'):
+    # timeout -> FAILED: aborts the task (mission ends, thrusters go idle, the
+    # positively-buoyant sub surfaces). Without it a persistently-suppressed
+    # target (e.g. a vision false-classification) means hovering/spinning
+    # until the battery dies. Timer resets on (re-)entry.
+    def __init__(self, target_type='either', timeout: float = 120.0):
         self.target_type = target_type.lower(); self.target_depth: float = 0.1
+        self.timeout = timeout; self.timer = 0.0
     def on_enter(self, sub: 'Submarine', sensors: SensorSuite, vision_data: Vision, context: Dict[str, Any]):
         self.target_depth = context.get('target_depth', sensors.depth)
+        self.timer = 0.0
     def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite, vision_data: Vision, config: SimulationConfig, context: Dict[str, Any]) -> Tuple[SubtaskStatus, ThrusterCommands]:
+        self.timer += dt
         visible = False
         if self.target_type == 'pole': visible = vision_data.is_pole_visible()
         elif self.target_type == 'gate': visible = vision_data.is_gate_visible()
         else: visible = vision_data.is_pole_visible() or vision_data.is_gate_visible()
         if visible: return SubtaskStatus.COMPLETED, sub.get_spin_damping_commands(sensors, self.target_depth)
-        else: heave, roll = sub.get_depth_roll_commands(sensors, self.target_depth, 0.0); return SubtaskStatus.RUNNING, sub._mix_and_normalize_commands(0, 0, 0, heave, roll)
+        if self.timer > self.timeout:
+            print(f"ERROR: WaitForTargetVisible('{self.target_type}') timed out after {self.timeout:.0f}s")
+            return SubtaskStatus.FAILED, sub._get_damping_commands(sensors)
+        heave, roll = sub.get_depth_roll_commands(sensors, self.target_depth, 0.0); return SubtaskStatus.RUNNING, sub._mix_and_normalize_commands(0, 0, 0, heave, roll)
+    def get_dynamic_name(self, context: Dict[str, Any]) -> str:
+        return f"{self.name}({self.target_type} {self.timer:.0f}/{self.timeout:.0f}s)"
 
 class AlignToObjectX(Subtask):
     def __init__(self, target_x_fraction: float, tolerance_px: int = 15, yaw_gain: float = 0.8, yaw_rate_tolerance: float = 0.05):
@@ -438,3 +450,87 @@ class ApproachAndCenterObject(Subtask):
             return SubtaskStatus.RUNNING, sub.get_spin_damping_commands(sensors, self.target_depth)
     def on_exit(self, sub: 'Submarine', sensors: SensorSuite, vision_data: Vision, context: Dict[str, Any]):
         if not self.time_since_target_lost > 0: context['initial_heading'] = sensors.heading
+
+# --- StyleRollSubtask ---
+class StyleRollSubtask(Subtask):
+    """
+    Roll the sub through `degrees` (e.g. 720 = two full rolls) then level out.
+
+    The accumulated angle is integrated from imu.gyro_x rather than read from
+    sensors.roll: the vehicle's roll channel is derived from an euler asin in
+    sensor_bridge and FOLDS at +/-90 deg, so it cannot track a full rotation.
+    The folded channel is only used for the final leveling PD, where (after a
+    multiple of 360 deg) the true angle is near 0 and the fold is harmless.
+
+    Heave is scaled by sign/max(0.3, |cos(roll)|) during the spin so the
+    vertical thrusters keep pushing the right way in the world frame while
+    inverted. Heading is held on context['initial_heading'] (set by the
+    preceding AlignToObjectX), so the sub stays pointed at the gate.
+
+    On timeout the subtask COMPLETES rather than fails — the roll is for
+    style points and must never kill the mission.
+    """
+    def __init__(self, degrees: float = 720.0, roll_power: float = 0.9,
+                 settle_deg: float = 3.0, settle_rate: float = 0.1,
+                 timeout: float = 120.0):
+        self.degrees = degrees
+        self.roll_power = roll_power
+        self.settle_deg = settle_deg
+        self.settle_rate = settle_rate
+        self.timeout = timeout
+        self.target_depth: float = 0.1
+        self.reset()
+
+    def reset(self):
+        self.accum = 0.0
+        self.timer = 0.0
+        self.spinning = True
+        self.hold_heading: Optional[float] = None
+
+    def on_enter(self, sub: 'Submarine', sensors: SensorSuite, vision_data: Vision, context: Dict[str, Any]):
+        self.reset()
+        self.target_depth = context.get('target_depth', sensors.depth)
+        self.hold_heading = context.get('initial_heading', sensors.heading)
+        print(f"INFO: StyleRoll starting: {self.degrees:.0f} deg at depth {self.target_depth:.2f} m")
+
+    def execute(self, sub: 'Submarine', dt: float, sensors: SensorSuite, vision_data: Vision, config: SimulationConfig, context: Dict[str, Any]) -> Tuple[SubtaskStatus, ThrusterCommands]:
+        if self.hold_heading is None:
+            self.on_enter(sub, sensors, vision_data, context)
+        self.timer += dt
+        self.accum += math.degrees(sensors.imu.gyro_x) * dt
+
+        if self.timer > self.timeout:
+            print(f"WARN: StyleRoll timed out at {self.accum:.0f}/{self.degrees:.0f} deg — completing anyway")
+            return SubtaskStatus.COMPLETED, sub._get_damping_commands(sensors)
+
+        yaw = float(np.clip(
+            math.radians(angle_diff(self.hold_heading, sensors.heading)) * sub.HOVER_YAW_P_GAIN
+            - sensors.imu.gyro_z * sub.YAW_D_GAIN, -1.0, 1.0))
+
+        if self.spinning:
+            if abs(self.accum) >= self.degrees - 15.0:
+                self.spinning = False
+                return SubtaskStatus.RUNNING, sub._get_damping_commands(sensors)
+            # World-frame-correct heave while rotating: cos from the integrated
+            # angle (the folded sensor channel is wrong past +/-90).
+            cos_roll = math.cos(math.radians(self.accum))
+            sign = 1.0 if cos_roll >= 0 else -1.0
+            heave_scale = sign / max(0.3, abs(cos_roll))
+            heave, _ = sub.get_depth_roll_commands(sensors, self.target_depth)
+            heave = float(np.clip(heave * heave_scale, -1.0, 1.0))
+            return SubtaskStatus.RUNNING, sub._mix_and_normalize_commands(
+                0.0, 0.0, yaw, heave, self.roll_power)
+
+        # Leveling: near a multiple of 360 the folded roll channel is valid
+        if (abs(sensors.roll) < self.settle_deg
+                and abs(sensors.imu.gyro_x) < self.settle_rate):
+            print(f"INFO: StyleRoll complete: {self.accum:.0f} deg accumulated, "
+                  f"leveled at {sensors.roll:+.1f} deg")
+            return SubtaskStatus.COMPLETED, sub._get_damping_commands(sensors)
+        heave, roll_cmd = sub.get_depth_roll_commands(sensors, self.target_depth, 0.0)
+        return SubtaskStatus.RUNNING, sub._mix_and_normalize_commands(
+            0.0, 0.0, yaw, heave, roll_cmd)
+
+    def get_dynamic_name(self, context: Dict[str, Any]) -> str:
+        phase = "spin" if self.spinning else "level"
+        return f"{self.name}({self.accum:+.0f}/{self.degrees:.0f} deg {phase})"

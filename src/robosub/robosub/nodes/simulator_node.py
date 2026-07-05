@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import math
+import random
+
 import pygame
 import numpy as np
 import rclpy
@@ -6,11 +9,14 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import Float32, Float32MultiArray, String
 from sensor_msgs.msg import Image, Imu
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, Vector3Stamped
 from cv_bridge import CvBridge
 
 from robosub.simulator.simulator import SubmarineSimulator
 from robosub.sub.data_structures import ThrusterCommands
+
+# Depth-frame gravity magnitude for the synthesized /imu/gravity vector.
+_G = 9.80665
 
 class SimulatorNode(Node):
     def __init__(self):
@@ -25,6 +31,34 @@ class SimulatorNode(Node):
             depth=1
         )
 
+        # Depth-sensor fusion mode. When on, the sim stops publishing
+        # ground-truth /sensors/depth and instead emulates the real (marginal)
+        # MS5837: a sparse, occasionally-corrupt /depth_raw plus the raw
+        # /imu + /imu/gravity that the depth_fusion node needs. depth_fusion
+        # (run alongside, /depth remapped to /sensors/depth) then reconstructs
+        # depth exactly as on hardware -- so the sim exercises the real fusion
+        # code path and can be checked against /sim/true_depth (always
+        # published). Default off: existing sim behavior is unchanged.
+        self.fuse_depth = bool(self.declare_parameter('fuse_depth', False).value)
+        # Emulated depth-sensor characteristics (defaults reproduce the bench:
+        # ~1.2 good reads/s, multi-second gaps, ~a few % corrupt-but-ACKed).
+        self.depth_attempt_hz = float(self.declare_parameter('depth_attempt_hz', 8.0).value)
+        self.depth_success_prob = float(self.declare_parameter('depth_success_prob', 0.16).value)
+        self.depth_corrupt_prob = float(self.declare_parameter('depth_corrupt_prob', 0.04).value)
+        self.depth_noise_std = float(self.declare_parameter('depth_noise_std', 0.02).value)
+        # Hardware-faithful velocity: publish /sensors/velocity the way the
+        # REAL vehicle senses it — x/y always zero (no DVL) and z from the
+        # depth_fusion node's /depth_fusion/velocity_z (stale -> 0), instead
+        # of physics ground truth. Combine with fuse_depth:=true to rehearse
+        # the mission under genuine hardware sensing.
+        self.hw_velocity = bool(self.declare_parameter('hw_velocity', False).value)
+        self._fused_vz = 0.0
+        self._fused_vz_t = None
+        if self.hw_velocity:
+            self.create_subscription(Float32, '/depth_fusion/velocity_z',
+                                     self._fused_vz_cb, 10)
+        self.frame_id = self.declare_parameter('frame_id', 'imu_link').value
+
         self._image_pub    = self.create_publisher(Image,             '/camera/image_raw', 10)
         self._depth_pub    = self.create_publisher(Float32,           '/sensors/depth',    self.qos)
         self._heading_pub  = self.create_publisher(Float32,           '/sensors/heading',  self.qos)
@@ -32,12 +66,28 @@ class SimulatorNode(Node):
         self._imu_pub      = self.create_publisher(Imu,               '/sensors/imu',      self.qos)
         self._velocity_pub = self.create_publisher(Twist,             '/sensors/velocity', self.qos)
         self._ctrl_pub     = self.create_publisher(String,            '/sim/control',      10)
+        # Always-on ground-truth reference so fused depth can be scored in sim.
+        self._true_depth_pub = self.create_publisher(Float32, '/sim/true_depth', 10)
+        # Raw hardware-side topics, published only in fusion mode.
+        if self.fuse_depth:
+            self._raw_imu_pub  = self.create_publisher(Imu, '/imu', 10)
+            self._gravity_pub  = self.create_publisher(Vector3Stamped, '/imu/gravity', 10)
+            self._depth_raw_pub = self.create_publisher(Float32, '/depth_raw', 10)
+            self._depth_attempt_accum = 0.0
+        self.get_logger().info(
+            'simulator_node up (depth: %s)'
+            % ('FUSED via depth_fusion (emulated MS5837 on /depth_raw + /imu/gravity)'
+               if self.fuse_depth else 'ground-truth passthrough /sensors/depth'))
 
         self.create_subscription(Float32MultiArray, '/thruster_commands', self._thruster_cb, self.qos)
         self.create_subscription(String, '/sub/status',   self._status_cb, 10)
         self.create_subscription(String, '/sim/control',  self._ctrl_cb,   10)
 
         self.sim = SubmarineSimulator()
+
+    def _fused_vz_cb(self, msg: Float32):
+        self._fused_vz = float(msg.data)
+        self._fused_vz_t = self.get_clock().now()
 
     def _thruster_cb(self, msg: Float32MultiArray):
         if len(msg.data) == 6:
@@ -65,13 +115,20 @@ class SimulatorNode(Node):
         elif cmd == 'quit':
             self.sim.running = False
 
-    def publish_sensors(self):
+    def publish_sensors(self, dt=0.0):
         p = self.sim.subPhysics
         imu = self.sim.last_imu_readings
         now = self.get_clock().now().to_msg()
 
-        # Publish sensors with Best Effort QoS
-        self._depth_pub.publish(Float32(data=float(p.z)))
+        # Ground truth, always -- lets fused depth be scored against reality.
+        self._true_depth_pub.publish(Float32(data=float(p.z)))
+
+        # Depth: ground-truth passthrough, or emulated raw sensor for fusion.
+        if self.fuse_depth:
+            self._publish_emulated_depth_raw(p.z, dt)
+        else:
+            self._depth_pub.publish(Float32(data=float(p.z)))
+
         self._heading_pub.publish(Float32(data=float(p.heading)))
         self._roll_pub.publish(Float32(data=float(p.roll)))
 
@@ -84,12 +141,92 @@ class SimulatorNode(Node):
         imu_msg.linear_acceleration.z = float(imu.accel_z)
         self._imu_pub.publish(imu_msg)
 
+        if self.fuse_depth:
+            self._publish_raw_imu(imu, p.roll, now)
+
         vel = Twist()
-        vel.linear.x, vel.linear.y, vel.linear.z = float(p.velocity_x), float(p.velocity_y), float(p.velocity_z)
+        if self.hw_velocity:
+            # As the real vehicle senses it: x/y zero (no DVL), z fused.
+            if (self._fused_vz_t is not None
+                    and (self.get_clock().now() - self._fused_vz_t).nanoseconds * 1e-9 < 1.0):
+                vel.linear.z = self._fused_vz
+        else:
+            vel.linear.x, vel.linear.y, vel.linear.z = float(p.velocity_x), float(p.velocity_y), float(p.velocity_z)
         self._velocity_pub.publish(vel)
 
         camera_np = np.ascontiguousarray(np.transpose(pygame.surfarray.array3d(self.sim.cameraSurface), (1, 0, 2))[:, :, ::-1])
         self._image_pub.publish(self._bridge.cv2_to_imgmsg(camera_np, encoding='bgr8'))
+
+    def _publish_raw_imu(self, imu, roll_deg, now):
+        """Publish the hardware-side /imu + /imu/gravity the fusion consumes.
+
+        The sim body frame here matches the on-vehicle raw IMU convention
+        used by depth_fusion: x=sway(right), y=surge(forward), z=heave(DOWN).
+        Gravity is therefore +Z when level and tilts with roll, so the
+        gravity-projection path recovers the true vertical no matter the
+        sub's attitude -- the same property we rely on in the water.
+        """
+        raw = Imu()
+        raw.header.stamp = now
+        raw.header.frame_id = self.frame_id
+        raw.angular_velocity.x = float(imu.gyro_x)
+        raw.angular_velocity.z = float(imu.gyro_z)
+        raw.linear_acceleration.x = float(imu.accel_x)
+        raw.linear_acceleration.y = float(imu.accel_y)
+        raw.linear_acceleration.z = float(imu.accel_z)
+        # Orientation quaternion (roll about x, pitch 0, yaw=heading) -- only
+        # the fusion's fallback path uses it; the gravity vector is primary.
+        r = math.radians(roll_deg)
+        y = math.radians(self.sim.subPhysics.heading)
+        cr, sr, cy, sy = math.cos(r / 2), math.sin(r / 2), math.cos(y / 2), math.sin(y / 2)
+        raw.orientation.w = cr * cy
+        raw.orientation.x = sr * cy
+        raw.orientation.y = sr * sy
+        raw.orientation.z = cr * sy
+        self._raw_imu_pub.publish(raw)
+
+        # Gravity vector (down-positive Z, tilted by roll about the x-axis).
+        g = Vector3Stamped()
+        g.header.stamp = now
+        g.header.frame_id = self.frame_id
+        g.vector.x = 0.0
+        g.vector.y = _G * math.sin(r)
+        g.vector.z = _G * math.cos(r)
+        self._gravity_pub.publish(g)
+
+    def _publish_emulated_depth_raw(self, true_z, dt):
+        """Emulate the marginal MS5837: sparse, noisy, occasionally corrupt.
+
+        Runs discrete sensor "attempts" at depth_attempt_hz; each attempt
+        either yields a near-truth reading, a wildly-corrupt one (drawn from
+        the failure modes seen on the bus), or nothing (a dropped read). This
+        reproduces the ~1 Hz effective rate, multi-second gaps, and garbage
+        that the innovation gate must survive.
+        """
+        self._depth_attempt_accum += dt
+        interval = 1.0 / self.depth_attempt_hz
+        while self._depth_attempt_accum >= interval:
+            self._depth_attempt_accum -= interval
+            r = random.random()
+            if r < self.depth_success_prob:
+                z = true_z + random.gauss(0.0, self.depth_noise_std)
+                self._depth_raw_pub.publish(Float32(data=float(z)))
+            elif r < self.depth_success_prob + self.depth_corrupt_prob:
+                # Corruption modes observed on the bus, each drawn with spread
+                # so two successive corrupt reads (nearly) never match -- real
+                # bus garbage is scattered, so it must not accidentally form a
+                # 2-read consensus in the gate.
+                mode = random.random()
+                if mode < 0.35:            # bus stuck low -> ~0
+                    z = random.uniform(-0.05, 0.05)
+                elif mode < 0.7:           # wild positive (bit-shift / float garbage)
+                    z = random.uniform(20.0, 300.0)
+                elif mode < 0.85:          # negative garbage
+                    z = random.uniform(-12.0, -3.0)
+                else:                      # plausible-looking offset
+                    z = true_z + random.uniform(1.0, 5.0)
+                self._depth_raw_pub.publish(Float32(data=float(z)))
+            # else: dropped read -- publish nothing.
 
     def publish_sim_control(self, command: str):
         self._ctrl_pub.publish(String(data=command))
@@ -123,7 +260,7 @@ def main(args=None):
                 sim.generateCameraView()
                 sim.applyPhysics(dt, node._commands)
                 sim.lastThrusterCommands = node._commands
-                node.publish_sensors()
+                node.publish_sensors(dt)
                 sim.render()
     finally:
         node.destroy_node()

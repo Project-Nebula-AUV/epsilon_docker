@@ -8,9 +8,12 @@
 #   sway   <- sideside.log        corners [2,3,4,5] = [+92,-96,-100,+100]
 #   yaw    <- yaw.log all-corners-equal (CCW), uniform [+1,+1,+1,+1]
 # heave/roll act on the vertical pair t0,t1 (heave = common, roll = differential).
-#   The two undetermined SIGNS are applied at runtime via the thruster_bridge
-#   params heave_sign / roll_sign (default +1) -> flip at P4 (heave likely inverted:
-#   sub is ~1N positively buoyant, steady -22.8 down-trim).
+#   The two signs are applied at runtime via the thruster_bridge params
+#   heave_sign / roll_sign. CONFIRMED on the bench 2026-06-21 (see
+#   epsilon_bridge/launch/hardware.launch.py): heave_sign = -1.0 (+heave=descend
+#   must drive motors 0/1 negative; sub is ~1N positively buoyant, steady
+#   -22.8 down-trim), roll_sign = +1.0. Both are set as the launch defaults now
+#   -- no longer open questions.
 allocation:
   surge: [0.0,  0.0, -0.92, -0.96,  1.0,  1.0]
   sway:  [0.0,  0.0,  0.92, -0.96, -1.0,  1.0]

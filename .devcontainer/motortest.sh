@@ -1,44 +1,126 @@
 #!/bin/bash
 # =============================================================================
-# Epsilon PREQUAL auto-run  (replaces the old thruster_tester motortest)
+# Epsilon auto-run  (hardened bring-up: clean slate -> preflight -> stack ->
+# readiness gate -> arm)
 #
-# Brings up the FULL autonomous stack, waits 10 s so the operator can submerge
-# the sub and stand clear, then ARMS and STARTS the mission. The sub runs the
-# pre-qual mission WITHOUT a depth sensor: sensor_bridge feeds a synthetic depth
-# (= MISSION_DEPTH) so the depth loop holds neutral, and it is started already
-# underwater. The nav searches (yaw-scan) for the gate, drives through it, and
-# attempts the rest of the mission.
+# Brings up the FULL autonomous stack, verifies it is actually healthy, then
+# (only if healthy) waits ARM_DELAY seconds so the operator can submerge the
+# sub and stand clear, then ARMS and STARTS the mission.
+#
+# DEFAULT MISSION = "hold" (station-keep): the sub holds heading + roll
+# (closed-loop from the IMU -- shove it and it corrects) and holds depth
+# closed-loop (fused MS5837+IMU depth, 2026-07-03). It does NOT run the gate
+# search. Set MISSION_MODE=prequal for the full pre-qual mission.
+#
+# DEPTH (2026-07-03, matches the sim code path): with_depth=true + depth_fusion
+# -> /sensors/depth is the real fused estimate and the depth PID is closed-loop.
+# The readiness gate below will NOT arm unless fused depth is actually flowing.
+# Fallback to the old open-loop bypass if the sensor acts up in the water:
+#   WITH_DEPTH=false SYNTHETIC_DEPTH=1.5 ./.devcontainer/motortest.sh
+#
+# STYLE ROLL (2026-07-03): in prequal mode the sub barrel-rolls STYLE_ROLL
+# degrees (default 720, sim-verified) in front of the gate before driving
+# through. FIRST WATER RUN: verify the sub can physically roll (righting moment
+# is not modeled in sim) and that fused depth tracks the dive -- if either looks
+# wrong, disable with STYLE_ROLL=0. The subtask times out to COMPLETED (75 s),
+# so a roll failure cannot strand the mission.
 #
 #   START:  ./.devcontainer/motortest.sh            (run inside robosub_dev)
+#   PREQUAL: MISSION_MODE=prequal ./.devcontainer/motortest.sh
 #   ABORT:  Ctrl-C  -> disarms thrusters + tears the stack down
 #   DISARM FROM ANOTHER SHELL:
 #           ros2 run epsilon_bridge arming_helper disarm
 #
-# Buoyancy trim: the sub is ~1 N positively buoyant, so with HEAVE_BIAS=0.0 it
-# will slowly rise (the fail-safe). To hold depth, raise HEAVE_BIAS toward ~0.5
-# (start small, e.g. 0.3) once you have watched a run. +heave = descend.
+# Buoyancy trim: with closed-loop depth the PID integrator supplies the ~0.6
+# heave needed against the ~1 N positive buoyancy; HEAVE_BIAS stays 0.0 (it is
+# still added open-loop if you set it, and is the primary hold in the
+# WITH_DEPTH=false fallback).
 #
 # Camera color: GRAY_WORLD=1 (default) software-neutralizes the OV9782 warm tint
 # so the red gate / white buoy thresholds read true colors. Set GRAY_WORLD=0 for raw.
 # =============================================================================
 set -u
 
-HEAVE_BIAS="${HEAVE_BIAS:-0.0}"             # 0.0 = neutral/surfaces; ~0.5 = hold vs buoyancy
-SYNTHETIC_DEPTH="${SYNTHETIC_DEPTH:-1.5}"   # must equal MISSION_DEPTH in robosub/mission.py
-ARM_DELAY="${ARM_DELAY:-10}"                # seconds between stack-up and arming
-GRAY_WORLD="${GRAY_WORLD:-1}"               # 1 = software-neutralize the camera warm tint (default on); 0 = raw
+MISSION_MODE="${MISSION_MODE:-hold}"        # hold = station-keep; prequal = full mission
+HEAVE_BIAS="${HEAVE_BIAS:-0.0}"             # open-loop trim (only load-bearing when WITH_DEPTH=false)
+WITH_DEPTH="${WITH_DEPTH:-true}"            # true = MS5837 + depth_fusion (closed loop)
+SYNTHETIC_DEPTH="${SYNTHETIC_DEPTH:--1.0}"  # -1.0 = real depth; >=0 = constant bypass (fallback)
+WORLD_Z_SIGN="${WORLD_Z_SIGN:-1.0}"         # depth_fusion vertical sign (see hardware.launch.py)
+STYLE_ROLL="${STYLE_ROLL:-720}"             # deg of barrel roll before the gate (prequal); 0 = off
+ARM_DELAY="${ARM_DELAY:-10}"                # seconds between READY and arming
+GRAY_WORLD="${GRAY_WORLD:-1}"               # 1 = software-neutralize the camera warm tint; 0 = raw
+READY_TIMEOUT="${READY_TIMEOUT:-45}"        # seconds to wait for the stack to become healthy
 
 # launch wants a bool string for the camera param
 GW_ARG=$([ "$GRAY_WORLD" = "1" ] && echo true || echo false)
 
+WS=/home/robosub/robosub_ws
 source /opt/ros/humble/setup.bash
-source /home/robosub/robosub_ws/install/setup.bash
+source "${WS}/install/setup.bash"
 
-# The USB camera node (/dev/video0,1) needs the host 'video' group, which the
-# container user is not in -> open the device nodes (container sudo is passwordless).
+# ─────────────────────────────────────────────────────────────────────────────
+# 0. CLEAN SLATE — kill any stale stack so launch hits free devices.
+#    A leftover camera/record process holding /dev/video0 is the classic cause
+#    of "Failed to open camera device 0" -> the nav never gets a frame -> no-op.
+#    Bracket-trick patterns so pkill never matches its own command line.
+# ─────────────────────────────────────────────────────────────────────────────
+echo "[prequal] clean slate: stopping any stale stack..."
+for pat in "[o]mni_control" "epsilon_bridge/[s]ensor_bridge" "epsilon_bridge/[t]hruster_bridge" \
+           "epsilon_bridge/[a]rming_helper" "epsilon_sensors/[c]amera" "epsilon_sensors/[i]mu" \
+           "epsilon_sensors/[d]epth_sensor" "[s]ubmarine_node" "[r]ecord_video" \
+           "[r]os2 launch epsilon_bridge"; do
+  pkill -9 -f "$pat" 2>/dev/null || true
+done
+sleep 2   # let the kernel release /dev/video0 and the I2C buses
+
+# The USB camera node (/dev/video0,1) needs RW access; open the device nodes
+# (container sudo is passwordless). Harmless if already RW.
 sudo chmod a+rw /dev/video0 /dev/video1 2>/dev/null || true
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. PREFLIGHT — fail fast with the fix if a known-ephemeral dependency is gone.
+# ─────────────────────────────────────────────────────────────────────────────
+preflight_fail=0
+check() {  # check "label" <test-cmd...>; on failure print the hint ($LAST_HINT)
+  local label="$1"; shift
+  if "$@" >/dev/null 2>&1; then
+    echo "[preflight]  OK   ${label}"
+  else
+    echo "[preflight] FAIL  ${label}"
+    [ -n "${LAST_HINT:-}" ] && echo "             fix: ${LAST_HINT}"
+    preflight_fail=1
+  fi
+}
+
+LAST_HINT="reinstall WiringPi: cd /tmp && git clone --depth 1 https://github.com/WiringPi/WiringPi && cd WiringPi && ./build && sudo ldconfig"
+check "WiringPi linked into omni_control" bash -c "ldd ${WS}/build/epsilon_control/omni_control 2>/dev/null | grep -qi wiring"
+
+LAST_HINT="sudo rm -f /usr/include/python3.10/numpy   (apt numpy headers shadow the venv -> cv_bridge segfault)"
+check "numpy header symlink absent (cv_bridge safe)" bash -c "[ ! -e /usr/include/python3.10/numpy ]"
+
+LAST_HINT="colcon build --packages-select epsilon_control  (omni_control not installed)"
+check "omni_control executable present" bash -c "ros2 pkg executables epsilon_control 2>/dev/null | grep -q omni_control"
+
+LAST_HINT="check the USB camera is plugged in (re-enumerates as /dev/video0)"
+check "/dev/video0 present + readable" bash -c "[ -r /dev/video0 ]"
+
+LAST_HINT="free disk: docker builder prune -af   (a near-full SD card breaks logging/IO)"
+check "disk has >=2 GB free" bash -c "[ \"\$(df --output=avail -BG / | tail -1 | tr -dc 0-9)\" -ge 2 ]"
+
+if [ "$preflight_fail" -ne 0 ]; then
+  echo "[prequal] PREFLIGHT FAILED — fix the above and re-run. Not launching."
+  exit 1
+fi
+echo "[prequal] preflight OK."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. LAUNCH the full stack DISARMED.
+# ─────────────────────────────────────────────────────────────────────────────
+export ROBOSUB_MISSION="$MISSION_MODE"   # submarine_node -> mission.py reads this
+export ROBOSUB_STYLE_ROLL="$STYLE_ROLL"  # barrel roll before the gate (prequal only; 0 = off)
+
 STACK_PID=""
+ARMED=0
 cleanup() {
   echo ""
   echo "[prequal] aborting -> disarm + stop stack"
@@ -47,23 +129,72 @@ cleanup() {
 }
 trap cleanup INT TERM
 
-# Bring up sensors + bridges (thruster_bridge DISARMED) + omni_control + nav brain.
-echo "[prequal] launching full stack (disarmed): synthetic_depth=${SYNTHETIC_DEPTH} heave_bias=${HEAVE_BIAS} gray_world=${GRAY_WORLD}"
+echo "[prequal] launching full stack (disarmed): mission=${MISSION_MODE} with_depth=${WITH_DEPTH} synthetic_depth=${SYNTHETIC_DEPTH} world_z_sign=${WORLD_Z_SIGN} style_roll=${STYLE_ROLL} heave_bias=${HEAVE_BIAS} gray_world=${GRAY_WORLD}"
 ros2 launch epsilon_bridge prequal.launch.py \
-    synthetic_depth:="${SYNTHETIC_DEPTH}" heave_bias:="${HEAVE_BIAS}" gray_world:="${GW_ARG}" &
+    with_depth:="${WITH_DEPTH}" synthetic_depth:="${SYNTHETIC_DEPTH}" \
+    world_z_sign:="${WORLD_Z_SIGN}" heave_bias:="${HEAVE_BIAS}" gray_world:="${GW_ARG}" &
 STACK_PID=$!
 
-# Countdown: submerge the sub and stand clear. Thrusters are still disarmed here.
-echo "[prequal] stack coming up; ARMING in ${ARM_DELAY}s. Ctrl-C to abort."
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. READINESS GATE — wait until the stack is actually producing data before
+#    arming. Replaces the old blind countdown that armed even when nothing came
+#    up. A BEST_EFFORT subscriber is QoS-compatible with both reliable and
+#    best-effort publishers, so it can sample every required topic.
+# ─────────────────────────────────────────────────────────────────────────────
+have_topic() {  # have_topic <topic> [timeout_s]
+  timeout -k 2 "${2:-5}" ros2 topic echo --once --qos-reliability best_effort "$1" >/dev/null 2>&1
+}
+
+# topic:label pairs that must be live for an autonomous run
+REQUIRED=(
+  "/camera/image_raw:camera frames"
+  "/imu:IMU"
+  "/sensors/heading:sensor_bridge heading"
+  "/sensors/depth:depth (fused or synthetic)"
+  "/sub/status:nav brain alive"
+)
+
+echo "[prequal] waiting up to ${READY_TIMEOUT}s for the stack to become healthy..."
+ready=0
+SECONDS=0
+while [ "$SECONDS" -lt "$READY_TIMEOUT" ]; do
+  missing=""
+  for item in "${REQUIRED[@]}"; do
+    topic="${item%%:*}"; label="${item#*:}"
+    have_topic "$topic" 4 || missing="${missing}  - ${label} (${topic})\n"
+  done
+  if [ -z "$missing" ]; then
+    ready=1
+    break
+  fi
+  # If the launch died, stop waiting.
+  if ! kill -0 "$STACK_PID" 2>/dev/null; then
+    echo "[prequal] launch process exited unexpectedly."
+    break
+  fi
+done
+
+if [ "$ready" -ne 1 ]; then
+  echo "[prequal] READINESS GATE FAILED after ${SECONDS}s. Missing:"
+  echo -e "$missing"
+  echo "[prequal] aborting (no arm)."
+  cleanup
+  exit 1
+fi
+echo "[prequal] stack healthy: camera + IMU + sensors + nav all live."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Operator countdown, then ARM + START.
+# ─────────────────────────────────────────────────────────────────────────────
+echo "[prequal] ARMING in ${ARM_DELAY}s. Submerge + stand clear. Ctrl-C to abort."
 for ((i=ARM_DELAY; i>0; i--)); do
   echo "[prequal]   arming in ${i}s..."
   sleep 1
 done
 
-# Arm: publishes 'start' to /sim/control (nav begins) AND arms thruster_bridge
-# (motors go live). arming_helper orders these safely.
-echo "[prequal] >>> ARMING + STARTING MISSION <<<"
+echo "[prequal] >>> ARMING + STARTING MISSION (${MISSION_MODE}) <<<"
 ros2 run epsilon_bridge arming_helper arm
+ARMED=1
 
 # Hold here running the stack until it exits or the operator aborts (Ctrl-C).
 wait "$STACK_PID"

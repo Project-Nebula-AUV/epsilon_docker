@@ -6,17 +6,22 @@ Then, once the sub is in the water, arm + start the mission (motors go live):
 (.devcontainer/motortest.sh does both: launches this, waits 10 s, then arms.)
 
 Difference vs hardware.launch.py: this also brings up omni_control (the actuator)
-and submarine_node (the nav brain), and it runs WITHOUT the depth sensor --
+and submarine_node (the nav brain).
 
-  * with_depth:=false        -> the dead/marginal MS5837 driver is not started.
-  * synthetic_depth:=1.5      -> sensor_bridge publishes a constant /sensors/depth
-                                 equal to MISSION_DEPTH, so the nav's depth_error is
-                                 ~0: the depth loop commands ~zero heave (neutral
-                                 hold) and StabilizeTask's depth gate is satisfied so
-                                 the mission advances. START THE SUB ALREADY SUBMERGED.
-  * heave_bias:=0.0           -> open-loop buoyancy trim. 0.0 is neutral (the sub
-                                 slowly surfaces -- the fail-safe). Raise toward ~0.5
-                                 in-water to actually hold against positive buoyancy.
+DEPTH IS CLOSED-LOOP BY DEFAULT (2026-07-03, matching the sim code path):
+  * with_depth:=true          -> MS5837 driver + depth_fusion run; /sensors/depth is
+                                 the fused estimate (gyro/accel dead-reckoning between
+                                 sparse pressure reads, innovation-gated). The nav's
+                                 depth PID actually holds depth.
+  * synthetic_depth:=-1.0     -> the constant-depth bypass is OFF (real passthrough).
+  * world_z_sign:=1.0         -> depth_fusion vertical sign (bench-checked; verify in
+                                 water via /depth_fusion/innovation -- see hardware.launch).
+  * heave_bias:=0.0           -> now only a trim aid; the closed-loop depth PID supplies
+                                 the buoyancy-holding heave via its integrator.
+
+FALLBACK to the old open-loop mode if the depth sensor acts up in the water:
+  ros2 launch epsilon_bridge prequal.launch.py with_depth:=false synthetic_depth:=1.5
+  (or via motortest.sh: WITH_DEPTH=false SYNTHETIC_DEPTH=1.5)
 
 The nav brain emits nothing until it has a camera frame AND a 'start' on /sim/control
 (arming_helper sends that), so launching this alone fires no thrusters.
@@ -36,9 +41,10 @@ def generate_launch_description():
 
     # Tunables surfaced at the prequal level so motortest.sh / the user can set them.
     args = [
-        DeclareLaunchArgument('synthetic_depth', default_value='1.5'),  # = MISSION_DEPTH
+        DeclareLaunchArgument('synthetic_depth', default_value='-1.0'), # real depth passthrough
         DeclareLaunchArgument('heave_bias', default_value='0.0'),       # buoyancy trim
-        DeclareLaunchArgument('with_depth', default_value='false'),     # MS5837 is dead
+        DeclareLaunchArgument('with_depth', default_value='true'),      # fused MS5837 depth
+        DeclareLaunchArgument('world_z_sign', default_value='1.0'),     # depth_fusion sign
         DeclareLaunchArgument('gray_world', default_value='false'),     # camera tint fix
     ]
 
@@ -48,6 +54,7 @@ def generate_launch_description():
             'with_depth': LaunchConfiguration('with_depth'),
             'synthetic_depth': LaunchConfiguration('synthetic_depth'),
             'heave_bias': LaunchConfiguration('heave_bias'),
+            'world_z_sign': LaunchConfiguration('world_z_sign'),
             'gray_world': LaunchConfiguration('gray_world'),
         }.items(),
     )

@@ -48,12 +48,25 @@ def generate_launch_description():
         DeclareLaunchArgument('synthetic_depth', default_value='-1.0'),
         # Constant descend trim for open-loop depth hold (nav-heave: +heave=descend).
         DeclareLaunchArgument('heave_bias', default_value='0.0'),
+        # depth_fusion vertical sign. 1.0 matches the BNO055 gravity-points-UP
+        # firmware convention (bench-checked 2026-07-03: /imu/gravity |g|=9.80).
+        # Definitive in-water check: watch /depth_fusion/innovation on the first
+        # dive -- growing innovations / frequent re-anchors => flip to -1.0.
+        DeclareLaunchArgument('world_z_sign', default_value='1.0'),
     ]
 
     imu = Node(package='epsilon_sensors', executable='imu', name='imu', output='screen',
                condition=IfCondition(LaunchConfiguration('with_imu')))
+    # The raw MS5837 driver is remapped off /depth; depth_fusion dead-reckons
+    # across its multi-second gaps with the BNO055 (last good depth + double-
+    # integrated world-Z accel, innovation-gated against corrupt reads) and
+    # republishes a continuous /depth, so downstream consumers are unchanged.
     depth = Node(package='epsilon_sensors', executable='depth_sensor', name='depth_sensor', output='screen',
+                 remappings=[('/depth', '/depth_raw')],
                  condition=IfCondition(LaunchConfiguration('with_depth')))
+    depth_fusion = Node(package='epsilon_sensors', executable='depth_fusion', name='depth_fusion', output='screen',
+                        parameters=[{'world_z_sign': _f('world_z_sign')}],
+                        condition=IfCondition(LaunchConfiguration('with_depth')))
     camera = Node(package='epsilon_sensors', executable='camera', name='camera', output='screen',
                   parameters=[{'gray_world': ParameterValue(
                       LaunchConfiguration('gray_world'), value_type=bool)}],
@@ -81,4 +94,4 @@ def generate_launch_description():
         }],
     )
 
-    return LaunchDescription(args + [imu, depth, camera, sensor_bridge, thruster_bridge])
+    return LaunchDescription(args + [imu, depth, depth_fusion, camera, sensor_bridge, thruster_bridge])

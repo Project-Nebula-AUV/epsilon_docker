@@ -13,7 +13,7 @@ from robosub.sub.tasks.task_base import Task, TaskStatus # Keep Task import
 # ---
 from robosub.sub.tasks.subtask_base import Subtask, SubtaskStatus
 from robosub.sub.tasks.common_subtasks import (DiveToDepth, WaitForTargetVisible, AlignToObjectX, DriveStraight,
-                                      Stabilize, DriveUntilTargetLost)
+                                      Stabilize, DriveUntilTargetLost, StyleRollSubtask)
 
 from robosub.sub.data_structures import SensorSuite, Vision, ThrusterCommands
 from robosub.sub.utils import angle_diff
@@ -21,18 +21,35 @@ from robosub.sub.utils import angle_diff
 class GateTask(Task):
     """Navigates through the gate defined by two red poles at a target depth."""
 
-    def __init__(self, target_depth: float = 1.0):
+    def __init__(self, target_depth: float = 1.0, style_roll_degrees: float = 0.0,
+                 style_roll_timeout: float = 75.0):
 
         self.target_depth = target_depth # Store target depth
+
+        align = dict(target_x_fraction=0.5,
+                     tolerance_px=10,
+                     yaw_gain=1.5,
+                     yaw_rate_tolerance=0.05)
 
         self.subtasks = [
             DiveToDepth(),
             WaitForTargetVisible(target_type='gate'),
-            AlignToObjectX(target_x_fraction=0.5,
-                           tolerance_px=10,
-                           yaw_gain=1.5,
-                           yaw_rate_tolerance=0.05),
+            AlignToObjectX(**align),
             Stabilize(duration=1.0, speed_threshold=0.1),
+        ]
+        if style_roll_degrees > 0:
+            # Style points: barrel-roll in front of the gate, then re-align
+            # (the roll drifts the sub a little) before driving through.
+            # Timeout completes (not fails) so a roll the vehicle physically
+            # can't finish never strands the mission.
+            self.subtasks += [
+                StyleRollSubtask(degrees=style_roll_degrees,
+                                 timeout=style_roll_timeout),
+                Stabilize(duration=1.0, speed_threshold=0.1),
+                AlignToObjectX(**align),
+                Stabilize(duration=1.0, speed_threshold=0.1),
+            ]
+        self.subtasks += [
             DriveUntilTargetLost(surge_power=0.6, target_type='gate'),
             DriveStraight(duration=4.0, surge_power=0.6),
             Stabilize(duration=1.0)
