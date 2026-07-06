@@ -15,6 +15,8 @@
 #     Sub must be LEVEL at launch (roll offset captured in first 1.5 s).
 #
 # Env: LIVE=0|1  HAND=0|1  ARM_DELAY=10  READY_TIMEOUT=45  WITH_DEPTH=true
+#      SUBMERGE=1 (LIVE water mode: arm on sustained depth instead of a fixed
+#      countdown; DEPTH_TRIGGER=0.35 TRIGGER_HOLD=3 GRACE=5 SUBMERGE_TIMEOUT=420)
 #      WITH_CAMERA=true  JPEG_HZ=4.0  GRAY_WORLD=0
 # Run inside the robosub_dev container. Ctrl-C at any point disarms + tears down.
 # ABORT FROM ANOTHER SHELL:
@@ -139,8 +141,40 @@ if [ "$MODE" = "live" ]; then
     cleanup; exit 1
   fi
   echo "[sysid] stack healthy."
-  echo "[sysid] ARMING in ${ARM_DELAY}s. Place the sub + STAND CLEAR. Ctrl-C aborts."
-  for ((i=ARM_DELAY; i>0; i--)); do echo "[sysid]   arming in ${i}s..."; sleep 1; done
+  if [ "${SUBMERGE:-0}" = "1" ]; then
+    # WATER WORKFLOW: no SSH access once the sub is in the pool. Start this
+    # (detached, see PROTOCOL) on land, carry the sub over, push it under —
+    # arming triggers on SUSTAINED depth, then a short grace to let go and
+    # step clear. Never submerged => times out DISARMED (safe).
+    DEPTH_TRIGGER="${DEPTH_TRIGGER:-0.35}"   # m; must read deeper than this
+    TRIGGER_HOLD="${TRIGGER_HOLD:-3}"        # consecutive seconds > trigger
+    GRACE="${GRACE:-5}"                      # let-go/stand-clear delay after trigger
+    SUBMERGE_TIMEOUT="${SUBMERGE_TIMEOUT:-420}"  # s; give up + teardown
+    echo "[sysid] SUBMERGE mode: waiting for depth > ${DEPTH_TRIGGER}m held ${TRIGGER_HOLD}s (timeout ${SUBMERGE_TIMEOUT}s)."
+    echo "[sysid] Put the sub in the water and push it under. After it holds depth ${TRIGGER_HOLD}s, you have ${GRACE}s to let go and stand clear."
+    held=0; SECONDS=0; triggered=0
+    while [ "$SECONDS" -lt "$SUBMERGE_TIMEOUT" ]; do
+      D=$(timeout -k 2 3 ros2 topic echo --once --qos-reliability best_effort /sensors/depth 2>/dev/null | grep -oP "(?<=data: )[-0-9.]+" | head -1)
+      if [ -n "$D" ] && awk "BEGIN{exit !($D > $DEPTH_TRIGGER)}"; then
+        held=$((held + 1))
+        echo "[sysid]   depth ${D}m (held ${held}/${TRIGGER_HOLD})"
+        if [ "$held" -ge "$TRIGGER_HOLD" ]; then triggered=1; break; fi
+      else
+        held=0
+      fi
+      kill -0 "$STACK_PID" 2>/dev/null || { echo "[sysid] launch died."; cleanup; exit 1; }
+      sleep 1
+    done
+    if [ "$triggered" -ne 1 ]; then
+      echo "[sysid] never submerged within ${SUBMERGE_TIMEOUT}s — teardown, NO ARM."
+      cleanup; exit 1
+    fi
+    echo "[sysid] SUBMERGED. ${GRACE}s grace — let go + stand clear."
+    sleep "$GRACE"
+  else
+    echo "[sysid] ARMING in ${ARM_DELAY}s. Place the sub + STAND CLEAR. Ctrl-C aborts."
+    for ((i=ARM_DELAY; i>0; i--)); do echo "[sysid]   arming in ${i}s..."; sleep 1; done
+  fi
 else
   sleep 8   # DRY: just let the stack come up
 fi

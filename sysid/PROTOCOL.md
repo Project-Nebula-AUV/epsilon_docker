@@ -113,6 +113,29 @@ out-of-water runs should stay short.
 # PART B — WATER SESSION 1 (pool, ~60–90 min incl. setup)
 Order = highest information per minute. Charge battery, note voltage per run.
 
+## ⚓ THE WATER-RUN RECIPE (no Pi access once wet — read once, use for every LIVE run)
+WiFi dies when the sub submerges, so LIVE runs start ON LAND, DETACHED from
+your SSH session, and arm themselves when the depth sensor sees the sub
+underwater. One command per run (from your laptop, sub on land beside the pool):
+```
+ssh robosub@epsilon
+docker exec -d robosub_dev bash -lc 'cd /home/robosub/robosub_ws && LIVE=1 SUBMERGE=1 ./sysid/sysid_run.sh s3_heave_staircase "water1, battery XX.XV" > /tmp/run.log 2>&1'
+```
+Then: carry the sub to the pool (readiness gate needs ~15–30 s — the walk
+covers it), put it in, **push it under past ~0.35 m and hold ~3 s**. The run
+arms itself, gives you **5 s to let go and step clear**, executes, ends at
+zero thrust, and the buoyant sub floats up. Retrieve it; back on land run
+`docker exec robosub_dev tail -20 /tmp/run.log` to see the result, or just
+check `ls sysid/runs/` for the new dir. Losing WiFi mid-run is HARMLESS
+(the run is parented to the container, not your terminal).
+- Never-submerged failsafe: if the sub isn't held under within 7 min, the
+  stack tears down DISARMED — restart the command and try again.
+- Abort while it's still on land / at the surface:
+  `docker exec robosub_dev bash -lc "source /opt/ros/humble/setup.bash && source ~/robosub_ws/install/setup.bash && ros2 service call /sysid_runner/arm std_srvs/srv/SetBool '{data: false}'"`
+- HAND runs (S1/S2) are at-the-surface with WiFi alive — run them the normal
+  attended way (no SUBMERGE needed).
+- Tunables if needed: DEPTH_TRIGGER=0.35 TRIGGER_HOLD=3 GRACE=5 SUBMERGE_TIMEOUT=420.
+
 ## S1. Static trim (2 min, motors off)
 ```
 HAND=1 ./sysid/sysid_run.sh s1_static_trim "static float"
