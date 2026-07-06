@@ -26,6 +26,72 @@ Modes: default = DRY (no motors, commands logged only) · `LIVE=1` = motors ·
 After every run, edit `sysid/runs/<id>/meta.yaml`: venue, water depth,
 battery voltage, and anything odd you saw.
 
+## Markers — how to annotate a run (IMPORTANT for all HAND tests)
+
+A marker is a timestamped text note that lands in the run's `markers.csv`.
+In LIVE runs the runner drops `STEP ...` markers automatically at every
+sequence step, so you never need to. In HAND tests (S1/S2/A1...) the log has
+no idea what your hands are doing — **markers are the only link between the
+sensor data and your maneuvers**, and the analysis scripts window on them.
+
+Open a SECOND shell alongside the run and set it up once:
+```
+ssh robosub@epsilon
+docker exec -it robosub_dev bash
+source /opt/ros/humble/setup.bash && source ~/robosub_ws/install/setup.bash
+```
+Then drop a marker (edit the text each time):
+```
+ros2 topic pub --once /sysid/marker std_msgs/msg/String "{data: 'tilt-roll-1'}"
+```
+Rules that make the data analyzable:
+- **Drop the marker FIRST, then do the maneuver.** Analysis windows look
+  FORWARD from each marker (typically 4–30 s), and the seconds just before
+  it are used as the "still" baseline — so be hands-off for ~3 s before
+  dropping, then act.
+- One marker per repetition, numbered: `tilt-roll-1`, `tilt-roll-2`, ...
+  `tilt-pitch-1`, ... kebab-case, no spaces needed inside the quotes but
+  keep it short and descriptive.
+- Botched a rep (bumped the sub, messy release)? Just drop `redo` and then
+  a fresh numbered marker for the retry — never reuse a number, and note it
+  in meta.yaml. Bad reps are skipped in analysis, not deleted.
+- Anything noteworthy mid-run is worth a marker too: `wall-touch`,
+  `wave-from-hand`, `battery-swap`. Timestamped notes beat memory.
+- Keep ~5 s between the end of one maneuver and the next marker so the
+  windows don't overlap.
+
+## What gets logged + checking a run
+
+Every run writes `sysid/runs/<timestamp>-<name>-<mode>/` on the sub:
+
+| file          | contents (first column = time, s)                        |
+|---------------|----------------------------------------------------------|
+| `cmd.csv`     | every /thrust_control actually sent (t0..t5, −100..100) — in a DRY run this IS the artifact |
+| `imu.csv`     | raw IMU: quaternion, gyro (rad/s), accel (m/s²), euler °. An all-zero group = corrupt read, treated as missing |
+| `gravity.csv` | body-frame gravity vector (points UP, |g|≈9.8)           |
+| `depth_raw.csv` | every parsed ESP32 depth reading, unfiltered (~7 Hz)   |
+| `fused.csv`   | the filtered /sensors/depth nav actually sees (20 Hz) + vertical velocity + stale flag |
+| `attitude.csv`| nav heading + roll (deg, ~18 Hz)                         |
+| `markers.csv` | your annotations + the runner's STEP markers             |
+| `frames/`     | camera JPEGs (default 4 Hz; A3 used 2 Hz)                |
+| `meta.yaml`   | run metadata — EDIT THIS after every run                 |
+
+Quick health check right after a run (numbers ≈ duration × rate):
+```
+cd sysid/runs/<id> && wc -l *.csv && ls frames | wc -l
+```
+Rules of thumb: imu/attitude ≈ 18×seconds, fused ≈ 20×seconds, depth_raw ≈
+7×seconds, cmd ≈ 50×seconds (LIVE/DRY only; ~0 in HAND). A file stuck at
+0–1 rows means that sensor wasn't up — rerun rather than salvage. The
+logger also prints a `logged: imu N, ...` status line every 5 s during the
+run; glance at it mid-test to confirm counts are climbing.
+
+meta.yaml: fill in `venue`, `water_depth_m`, `battery_v` (read it per run —
+thrust fits need it) and free-text `notes` (what you saw: drift, bubbles,
+wall contact, redo reps). 30 seconds now saves an unusable dataset later.
+Raw runs are the source of truth — never delete or rename run directories;
+bad runs just get noted in meta.yaml.
+
 ## ⚠ Current hardware status (2026-07-05)
 - **Depth sensor: WORKING — new architecture (2026-07-06).** The MS5837 now
   hangs off a Xiao ESP32-C3 (its own I2C), which streams JSON to the Pi over
@@ -58,8 +124,8 @@ channel (needed for the bow-up coupling measurement; it is NOT published today).
 HAND=1 ./sysid/sysid_run.sh a1_hand_signs "hand motion sign check"
 ```
 The sub must be **LEVEL and STILL for the first 2 s** (roll offset capture).
-Then do each maneuver ~5 s apart, and after each one drop a marker from a
-second shell (edit the text each time):
+Then for each maneuver: **drop its marker FIRST** (see "Markers" section —
+the analysis windows forward from each marker), then do the move:
 ```
 ros2 topic pub --once /sysid/marker std_msgs/msg/String "{data: 'roll-starboard-down'}"
 ```
@@ -112,28 +178,6 @@ out-of-water runs should stay short.
 
 # PART B — WATER SESSION 1 (pool, ~60–90 min incl. setup)
 Order = highest information per minute. Charge battery, note voltage per run.
-
-## ⚓ THE WATER-RUN RECIPE (no Pi access once wet — read once, use for every LIVE run)
-LIVE runs start ON LAND, DETACHED from your SSH session (`docker exec -d`),
-with a **90-second countdown** before the motors arm. One command per run
-(from your laptop, sub on land beside the pool):
-```
-ssh robosub@epsilon
-docker exec -d robosub_dev bash -lc 'cd /home/robosub/robosub_ws && LIVE=1 ./sysid/sysid_run.sh s3_heave_staircase "water1, battery XX.XV" > /tmp/run.log 2>&1'
-```
-Then you have the readiness gate (~15–30 s) **plus the full 90 s countdown**
-to carry the sub to the pool, place it at the start depth/position, and
-stand clear. The sequence runs, ends at zero thrust, and the buoyant sub
-floats up. Retrieve it; back on land run
-`docker exec robosub_dev tail -20 /tmp/run.log` for the result, or just
-check `ls sysid/runs/` for the new dir. Losing WiFi mid-run is HARMLESS —
-the run is parented to the container, not your terminal, and everything
-logs onboard automatically (you never have to touch anything mid-run).
-- Need more/less time? `ARM_DELAY=120 LIVE=1 ...` (seconds).
-- Abort while it's still reachable (on land / at the surface):
-  `docker exec robosub_dev bash -lc "source /opt/ros/humble/setup.bash && source ~/robosub_ws/install/setup.bash && ros2 service call /sysid_runner/arm std_srvs/srv/SetBool '{data: false}'"`
-- HAND runs (S1/S2) are at-the-surface with WiFi alive — run them the normal
-  attended way.
 
 ## S1. Static trim (2 min, motors off)
 ```
@@ -224,8 +268,8 @@ Repeat once with `GRAY_WORLD=1 … s10_vision_gw` (the nav's color pipeline).
 ---
 
 # AFTER EVERY SESSION
-1. `ls ~/epsilon_docker/sysid/runs/` — one dir per run, check row counts look
-   alive (`wc -l *.csv`).
+1. `ls ~/epsilon_docker/sysid/runs/` — one dir per run, health-check each per
+   the "What gets logged" section (`wc -l *.csv`, rates ≈ duration × Hz).
 2. Fill in every meta.yaml (venue/depth/battery/notes — 30 s each).
 3. Nothing else. The model pulls the dirs, fits, and updates RESUME.md.
    Raw runs are the source of truth — never delete them.
