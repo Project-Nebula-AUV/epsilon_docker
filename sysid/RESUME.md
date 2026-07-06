@@ -141,15 +141,15 @@ this stream via the new `esp32_depth` driver (epsilon_sensors):
 - PART A COMPLETE 2026-07-06 (A1 ✓ A2 ✓ A3 ✓ A4 ✓ A5 ✓; photos DELIVERED —
   sysid/photos/, confirm X-config corners + port/stbd verticals; corner toe
   angle → S7).
-- 2026-07-06 PM4: **WATER-RUN WORKFLOW built + verified** (user flagged: no Pi
-  access once wet; old fixed 10-15 s countdown + SSH-tethered run were both
-  unusable in water). sysid_run.sh SUBMERGE=1 mode: start detached on land
-  (`docker exec -d`), readiness gate, then ARM ON SUSTAINED DEPTH
-  (>0.35 m held 3 s from the ESP32 sensor) + 5 s let-go grace; never-submerged
-  → 7-min timeout, teardown DISARMED. Bench-verified BOTH paths detached
-  (zero-thrust sequence): trigger→arm→done with the launching SSH session
-  irrelevant, and timeout→NO-ARM. Recipe = top of PROTOCOL Part B. Buoyancy
-  trim variants (s4/s7/s8 _trim, verticals −22) DRY-verified same day.
+- 2026-07-06 PM4: **WATER-RUN WORKFLOW** (user flagged: no Pi access once wet).
+  Final design PER USER — simple countdown, nothing to log mid-run:
+  LIVE default ARM_DELAY now **90 s** (was 10), runs started DETACHED
+  (`docker exec -d`, run parented to the container → WiFi loss mid-run is
+  harmless, everything logs onboard). Recipe = top of PROTOCOL Part B.
+  [A depth-triggered-arming variant was built, bench-verified both paths,
+  then REMOVED at user request — countdown preferred. In git history at
+  51741d6 if ever wanted.] Buoyancy trim variants (s4/s7/s8 _trim, verticals
+  −22) DRY-verified same day; verifier arm-boundary fix in.
 - 2026-07-06 PM3 follow-ups: **ESP32 wake-up issue RE-TESTED: RESOLVED** —
   5/5 clean first-attempt boots + 60 s driver soak (0 init-fails, 0
   reconnects, ±1 mm at rest); the driver's reset-retry stays as backstop.

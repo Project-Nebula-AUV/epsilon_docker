@@ -1,7 +1,0 @@
-# All-zeros 8 s sequence: exercises the arm/run/done path with ZERO motor
-# output — safe workflow test anywhere (used to verify SUBMERGE mode).
-name: zero_smoke
-mode: thrust
-max_abs: 10.0
-steps:
-  - {dur: 8.0, thrust: [0, 0, 0, 0, 0, 0], label: zeros}
