@@ -1,0 +1,19 @@
+# S3 heave staircase: vertical thrust curve (incl. deadband), buoyancy, heave
+# drag. Doubles as the depth-fusion verification dataset (fused vs staircase).
+# NEGATIVE verticals = descend on this vehicle. Start at ~0.6-0.8 m mid-depth,
+# pool floor 1.52 m: expect slow descent through the down-stairs, buoyant rise
+# during the zero hold, gentle up-steps after. ABORT (Ctrl-C / arm false) if
+# the sub nears floor or surface aeration.
+name: s3_heave_staircase
+mode: thrust
+max_abs: 50.0
+steps:
+  - {dur: 3.0, thrust: [0, 0, 0, 0, 0, 0], label: baseline-float}
+  - {dur: 5.0, thrust: [-10, -10, 0, 0, 0, 0], label: down10}
+  - {dur: 5.0, thrust: [-20, -20, 0, 0, 0, 0], label: down20}
+  - {dur: 5.0, thrust: [-30, -30, 0, 0, 0, 0], label: down30}
+  - {dur: 5.0, thrust: [-40, -40, 0, 0, 0, 0], label: down40}
+  - {dur: 4.0, thrust: [0, 0, 0, 0, 0, 0], label: recover-buoyant}
+  - {dur: 4.0, thrust: [10, 10, 0, 0, 0, 0], label: up10}
+  - {dur: 4.0, thrust: [20, 20, 0, 0, 0, 0], label: up20}
+  - {dur: 3.0, thrust: [0, 0, 0, 0, 0, 0], label: tail}

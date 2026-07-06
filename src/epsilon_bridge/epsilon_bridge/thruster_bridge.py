@@ -9,7 +9,7 @@ from std_msgs.msg import Float32MultiArray, Float64MultiArray
 from std_srvs.srv import SetBool
 from ament_index_python.packages import get_package_share_directory
 
-COS45 = 0.7071  # MUST match the sim mix constant in robosub/sub/submarine.py
+COS45 = 0.7071  # MUST match the sim mix constant in robosub/sub/control.py
 
 
 class ThrusterBridge(Node):

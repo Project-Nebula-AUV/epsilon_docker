@@ -13,6 +13,7 @@ services:
       - "986"   # gpio  (host /dev/gpiochip* group)
       - "988"   # i2c   (host /dev/i2c-* group)
       - "44"    # video (host /dev/video* group; USB OV9782 camera)
+      - "20"    # dialout (host /dev/ttyACM* group; ESP32-C3 depth bridge -- takes effect on next container recreate)
   sitl:
     image: lunarzdev/epsilon-sitl:rpi
     environment:

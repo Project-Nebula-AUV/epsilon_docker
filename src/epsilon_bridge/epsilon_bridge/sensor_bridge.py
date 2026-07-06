@@ -43,8 +43,8 @@ class SensorBridge(Node):
         super().__init__('sensor_bridge')
         self.heading_sign = float(self.declare_parameter('heading_sign', 1.0).value)
         self.roll_sign = float(self.declare_parameter('roll_sign', 1.0).value)
-        self.yaw_rate_sign = float(self.declare_parameter('yaw_rate_sign', 1.0).value)
-        self.roll_rate_sign = float(self.declare_parameter('roll_rate_sign', 1.0).value)
+        self.yaw_rate_sign = float(self.declare_parameter('yaw_rate_sign', -1.0).value)  # A1 2026-07-06: raw gz OPPOSITE heading
+        self.roll_rate_sign = float(self.declare_parameter('roll_rate_sign', -1.0).value)  # A1 2026-07-06: raw gy OPPOSITE published roll
         self.heading_offset_deg = float(self.declare_parameter('heading_offset_deg', 0.0).value)
         # Roll zeroing: assume level at power-on and capture the mounting offset.
         self.capture_level_on_start = bool(self.declare_parameter('capture_level_on_start', True).value)

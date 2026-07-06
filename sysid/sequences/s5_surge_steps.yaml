@@ -1,0 +1,16 @@
+# S5 surge steps AT THE GATE: surge thrust/drag from camera range-from-width,
+# and the bow-up pitch coupling vs speed (raw-quat euler in imu.csv). Start
+# 4-5 m from the real gate, FACING it, gate centered in frame. Zeros between
+# bursts let the sub coast + pitch relax. Watch clearance to the gate; abort
+# if a collision looks possible.
+name: s5_surge_steps
+mode: wrench
+max_abs: 60.0
+steps:
+  - {dur: 3.0, wrench: [0, 0, 0, 0, 0], label: baseline-gate-visible}
+  - {dur: 6.0, wrench: [0.20, 0, 0, 0, 0], label: surge20}
+  - {dur: 5.0, wrench: [0, 0, 0, 0, 0], label: coast1}
+  - {dur: 6.0, wrench: [0.35, 0, 0, 0, 0], label: surge35}
+  - {dur: 5.0, wrench: [0, 0, 0, 0, 0], label: coast2}
+  - {dur: 5.0, wrench: [0.50, 0, 0, 0, 0], label: surge50}
+  - {dur: 4.0, wrench: [0, 0, 0, 0, 0], label: tail-coast}

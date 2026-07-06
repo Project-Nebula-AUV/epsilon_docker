@@ -1,0 +1,43 @@
+# A2 physical measurements — USER, tape measure + scale, 2026-07-06 bench.
+# Raw values as reported (imperial) + SI conversions. Photos still pending.
+
+mass:
+  as_diving_lb: 22
+  as_diving_kg: 9.98
+
+hull:
+  frame_in: {length: 12, width: 10, height: 9}          # bare frame
+  envelope_in: {length: 22, width: 18, height: 14}      # incl. motors etc.
+  envelope_m: {length: 0.559, width: 0.457, height: 0.356}
+  # sim submarineWidth 0.46 m matches the real 18 in envelope width well.
+
+thrusters:
+  vertical_pair_spacing_in: 14.5      # center-to-center, lateral
+  vertical_pair_spacing_m: 0.368
+  roll_moment_arm_m: 0.184            # half-spacing; sim currently uses
+                                      # submarineWidth/2 = 0.23 -> sim roll
+                                      # authority ~25% OPTIMISTIC (queued fix)
+  corner_rect_in: {lateral: 11, longitudinal: 18}   # FR-FL / FR-BR distances
+  corner_positions_m: "x = ±0.229 (fore/aft), y = ±0.140 (lateral) from center"
+  corner_angle: "~45 deg all four (user visual); true vectors from S7"
+  # 45-deg yaw arm is mounting-orientation dependent:
+  #   pinwheel (thrust ⊥ diagonal): (0.229+0.140)*0.707 = 0.261 m
+  #   toed (thrust ∥ diagonal):     (0.229−0.140)*0.707 = 0.063 m
+  # sim yawMomentArm=0.32 is above even the optimistic case. S4+S7 fit decides.
+
+derived_inertia_box_model_kg_m2:     # m/12*(a²+b²) on the envelope; PRIORS
+  Iz_yaw: 0.434                      # (L²+W²)
+  Iy_pitch: 0.366                    # (L²+H²)
+  Ix_roll: 0.280                     # (W²+H²)
+
+gate:
+  status: "NOT MEASURED — user: adapt for now. Pool venue keeps the 0.5 m bar
+           ASSUMPTION; comp gate geometry (2 m width) unchanged. Range-from-
+           width must use the REAL prop widths once provided."
+
+photos: sysid/photos/sub_93{76,77,78,79,83}.jpg (2026-07-06). 9376=front
+  (camera dome, front corner pair), 9377=rear, 9378/9379=sides, 9383=TOP
+  (X-config layout). Confirm: 4 corner thrusters ~45 deg horizontal X-config,
+  2 verticals mid-length port/starboard (the 14.5 in pair), electronics box
+  topside. Corner toe angle not measurable from photos -> S7 fits the true
+  thrust vectors/yaw arms.

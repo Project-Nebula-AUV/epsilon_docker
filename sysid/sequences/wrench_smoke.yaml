@@ -1,0 +1,14 @@
+# Smoke test for wrench mode (DRY only): one unit pulse per axis. cmd.csv must
+# reproduce allocation.yaml columns x20:
+#   surge 0.2 -> [0,0, -18.4,-19.2, 20,20]      sway 0.2 -> [0,0, 18.4,-19.2,-20,20]
+#   heave 0.2 -> [20,20, 0,0,0,0]               yaw 0.2  -> [0,0, 20,20,20,20]
+#   roll 0.2  -> [20,-20, 0,0,0,0]
+name: wrench_smoke
+mode: wrench
+max_abs: 25.0
+steps:
+  - {dur: 1.0, wrench: [0.2, 0, 0, 0, 0], label: surge}
+  - {dur: 1.0, wrench: [0, 0.2, 0, 0, 0], label: sway}
+  - {dur: 1.0, wrench: [0, 0, 0.2, 0, 0], label: heave}
+  - {dur: 1.0, wrench: [0, 0, 0, 0.2, 0], label: yaw}
+  - {dur: 1.0, wrench: [0, 0, 0, 0, 0.2], label: roll}

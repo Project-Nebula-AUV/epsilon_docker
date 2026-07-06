@@ -5,11 +5,19 @@
 #     mode: full (default) | gate | slalom | orbit | hold
 #
 #   Env:
-#     HW_FAITHFUL=1        emulated marginal MS5837 + depth_fusion + zeroed
-#                          x/y velocity (the hardware sensing contract)
+#     HW_FAITHFUL=1        the hardware sensing contract (2026-07-06): ESP32
+#                          depth-chain emulation (~7 Hz filtered, 20 Hz ZOH)
+#                          + zeroed x/y velocity. No fusion node involved.
+#     LEGACY_FUSED=1       the OLD hw mode: emulated marginal MS5837-on-Pi
+#                          + depth_fusion (kept runnable for regression work)
+#     VENUE=pool|comp      world depth 1.52|5.8 m; pool also defaults
+#                          ROBOSUB_MISSION_DEPTH to 0.8
 #     STYLE_ROLL=<deg>     barrel roll before the outbound gate (default 720
 #                          for full/gate, 0 otherwise)
 #     ROBOSUB_SIM_SEED, ROBOSUB_START_X/Y/HDG   course/start overrides
+#
+# Sensor cadence/noise (18.2 Hz IMU etc.) comes from sysid/sim_calibration.yaml
+# in ALL modes once present — the sim is never easier than the vehicle.
 #
 # After the run: python3 judge.py /tmp/sim_truth.csv /tmp/sim_geom.json
 source /opt/ros/humble/setup.bash
@@ -36,14 +44,27 @@ for p in "[s]im_gui_node" "[s]imulator_node" "[s]ubmarine_node" "[d]epth_fusion"
 done
 sleep 1
 
+if [ -n "${VENUE:-}" ]; then
+  export ROBOSUB_VENUE="$VENUE"
+  if [ "$VENUE" = "pool" ]; then
+    # 1.52 m water: cruise at 0.8, gate-opening center ~1.0 (bar assumed 0.5)
+    [ -z "${ROBOSUB_MISSION_DEPTH:-}" ] && export ROBOSUB_MISSION_DEPTH=0.8
+    [ -z "${ROBOSUB_GATE_DEPTH:-}" ] && export ROBOSUB_GATE_DEPTH=1.0
+  fi
+  echo "[run] venue=$VENUE mission_depth=${ROBOSUB_MISSION_DEPTH:-1.5} gate_depth=${ROBOSUB_GATE_DEPTH:-1.55}"
+fi
+
 SIM_ARGS=""
 FUS=""
-if [ "$HW_FAITHFUL" = "1" ]; then
-  echo "[run] HW-FAITHFUL sensing (fused depth + zeroed lateral velocity)"
+if [ "${LEGACY_FUSED:-0}" = "1" ]; then
+  echo "[run] LEGACY fused sensing (emulated marginal MS5837 + depth_fusion)"
   SIM_ARGS="--ros-args -p fuse_depth:=true -p hw_velocity:=true"
   ros2 run epsilon_sensors depth_fusion --ros-args \
       -r /depth:=/sensors/depth -p world_z_sign:=-1.0 > /tmp/run_fus.log 2>&1 &
   FUS=$!
+elif [ "$HW_FAITHFUL" = "1" ]; then
+  echo "[run] HW-FAITHFUL sensing (ESP32 depth-chain emulation + zeroed lateral velocity)"
+  SIM_ARGS="--ros-args -p depth_mode:=esp32 -p hw_velocity:=true"
 fi
 
 ros2 run robosub sim_gui_node $SIM_ARGS > /tmp/run_sim.log 2>&1 &

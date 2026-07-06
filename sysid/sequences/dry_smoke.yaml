@@ -1,0 +1,11 @@
+# Smoke test for the runner itself (DRY only): exercises hold steps, a ramp,
+# the auto-zero tail, and step markers. Expected cmd.csv: 1 s zeros, 1 s
+# [10,10,0..], 2 s linear ramp to [0,0,10,10,10,10], 1 s hold, auto zero tail.
+name: dry_smoke
+mode: thrust
+max_abs: 20.0
+steps:
+  - {dur: 1.0, thrust: [0, 0, 0, 0, 0, 0], label: baseline}
+  - {dur: 1.0, thrust: [10, 10, 0, 0, 0, 0], label: verticals10}
+  - {dur: 2.0, thrust: [0, 0, 10, 10, 10, 10], ramp: true, label: corner-ramp}
+  - {dur: 1.0, thrust: [0, 0, 10, 10, 10, 10], label: corner-hold}

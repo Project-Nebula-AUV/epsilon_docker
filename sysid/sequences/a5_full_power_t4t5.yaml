@@ -1,0 +1,15 @@
+# A5 full-power comparison, RESTART FROM t4 (run 2 died at a Pi brownout —
+# full-power corner load sags the supply on a drained battery). t4 + t5 only.
+name: a5_full_power_t4t5
+mode: thrust
+max_abs: 100.0
+steps:
+  - {dur: 3.0, thrust: [0, 0, 0, 0, 0, 0], label: baseline}
+  - {dur: 15.0, thrust: [0, 0, 0, 0, 100, 0], label: t4-FR+100}
+  - {dur: 5.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 15.0, thrust: [0, 0, 0, 0, -100, 0], label: t4-FR-100}
+  - {dur: 5.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 15.0, thrust: [0, 0, 0, 0, 0, 100], label: t5-RR+100}
+  - {dur: 5.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 15.0, thrust: [0, 0, 0, 0, 0, -100], label: t5-RR-100}
+  - {dur: 3.0, thrust: [0, 0, 0, 0, 0, 0], label: tail}

@@ -1,0 +1,34 @@
+# A5 full-power bench comparison (USER-REQUESTED 2026-07-06): each thruster
+# 15 s at +100 then 15 s at -100, 5 s rests. Purpose: audible/airflow
+# comparison of mirror pairs at full authority (the ±20/±40 pulses were too
+# weak to judge equality). BENCH ONLY, props free, user supervising —
+# unloaded full-power runtime is deliberate; abort on any hot smell/scream.
+name: a5_full_power
+mode: thrust
+max_abs: 100.0
+steps:
+  - {dur: 3.0, thrust: [0, 0, 0, 0, 0, 0], label: baseline}
+  - {dur: 15.0, thrust: [100, 0, 0, 0, 0, 0], label: t0-LV+100}
+  - {dur: 5.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 15.0, thrust: [-100, 0, 0, 0, 0, 0], label: t0-LV-100}
+  - {dur: 5.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 15.0, thrust: [0, 100, 0, 0, 0, 0], label: t1-RV+100}
+  - {dur: 5.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 15.0, thrust: [0, -100, 0, 0, 0, 0], label: t1-RV-100}
+  - {dur: 5.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 15.0, thrust: [0, 0, 100, 0, 0, 0], label: t2-RL+100}
+  - {dur: 5.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 15.0, thrust: [0, 0, -100, 0, 0, 0], label: t2-RL-100}
+  - {dur: 5.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 15.0, thrust: [0, 0, 0, 100, 0, 0], label: t3-FL+100}
+  - {dur: 5.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 15.0, thrust: [0, 0, 0, -100, 0, 0], label: t3-FL-100}
+  - {dur: 5.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 15.0, thrust: [0, 0, 0, 0, 100, 0], label: t4-FR+100}
+  - {dur: 5.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 15.0, thrust: [0, 0, 0, 0, -100, 0], label: t4-FR-100}
+  - {dur: 5.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 15.0, thrust: [0, 0, 0, 0, 0, 100], label: t5-RR+100}
+  - {dur: 5.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 15.0, thrust: [0, 0, 0, 0, 0, -100], label: t5-RR-100}
+  - {dur: 3.0, thrust: [0, 0, 0, 0, 0, 0], label: tail}

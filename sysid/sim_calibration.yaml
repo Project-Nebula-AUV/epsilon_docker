@@ -1,0 +1,51 @@
+# sim_calibration.yaml — THE product of the sysid arc. Every value here was
+# MEASURED on the physical vehicle; provenance on every line. The sim loads
+# this at startup (config.py `sim:` overlay; simulator_node `sensors:` become
+# parameter defaults). Missing file = nominal code defaults. Never put a value
+# here that makes the sim EASIER than reality.
+#
+# Path override: ROBOSUB_CALIBRATION (default /home/robosub/robosub_ws/sysid/sim_calibration.yaml)
+
+sim:
+  # Camera horizontal FOV (deg), MEASURED A3 2026-07-06: 3ft PVC (0.9144 m)
+  # horizontal at 8 ft (2.438 m) spans 251 px of 320 -> f=669 px -> 26.9 deg
+  # (cross-checked: predicts frame overflow at 5 ft, observed in 2 captures).
+  # The 320x240 mode center-crops the sensor; sim previously assumed 70!
+  cameraFov: 26.9
+  # --- SimulationConfig overrides (dynamics) ---
+  # A2 bench measurements 2026-07-06 (sysid/bench_measurements.yaml):
+  subMass: 9.98            # MEASURED 22 lb as-diving (sim default was 4.0!)
+  # volume derived: mass + the June-observed ~+1 N positive trim
+  # ((m*g+1)/(rho*g)); replace with the S1/S3 fitted buoyancy.
+  subVolume: 0.010078
+  # box-model inertias from measured mass + envelope (PRIORS pending S2 fits):
+  subInertia_Z: 0.434
+  subInertia_Y: 0.366
+  subInertia_X: 0.280
+  # NOTHING ELSE FITTED YET. The passive-pitch/roll-righting params
+  # (pitchRightingMoment, rollRightingMoment, surgePitchCoupling,
+  # surgePitchVelCoupling) run on NOMINAL PRIORS in config.py until the
+  # S2 tilt-release and S5 surge-step fits land. Schema example:
+  #   pitchRightingMoment: 0.42   # fit/s2_pitch_fit.py on runs/<id>, resid 0.03
+
+sensors:
+  # --- simulator_node emulation parameter defaults ---
+  # IMU chain: 10-min rest capture, full stack load, run
+  # 20260705-172215-a4_imu_rest-hand, analyzed by sysid/fit/imu_rest_stats.py.
+  sensor_rate_hz: 18.2        # measured mean publish rate (nominal 20 Hz)
+  sensor_gap_prob: 0.0001     # one 0.45 s gap in 11648 samples
+  sensor_gap_s: 0.45          # the measured worst gap
+  heading_noise_std: 1.32     # deg — euler-yaw std at rest
+  roll_noise_std: 0.55        # deg — published-roll (euler-pitch) std at rest
+  imu_gyro_noise_std: 0.002   # rad/s — per-axis std at rest (x .0020 y .0026 z .0014)
+  imu_accel_noise_std: 0.016  # m/s^2 — mean of per-axis stds (.014/.009/.023)
+  imu_gyro_zero_prob: 0.012   # corrupt-read rate: whole gyro group zeroed
+  imu_accel_zero_prob: 0.081  # corrupt-read rate: whole accel group zeroed
+
+  # ESP32 depth chain: bench stream measurements 2026-07-06 (runs
+  # 20260706-054048-esp32_chain_check-hand + driver soak). REFIT AFTER S3
+  # (in-water outlier statistics + noise under motion).
+  esp32_update_hz: 7.2        # measured effective JSON stream rate
+  esp32_noise_std: 0.008      # m — raw depth band ±~2 cm in air
+  esp32_gap_prob: 0.002       # per update: driver filter rejecting an outlier
+  esp32_publish_hz: 20.0      # driver's ZOH republish rate (design, verified)

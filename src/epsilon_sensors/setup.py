@@ -37,6 +37,7 @@ setup(
             'imu = epsilon_sensors.imu:main',
             'depth_sensor = epsilon_sensors.depth_sensor:main',
             'depth_fusion = epsilon_sensors.depth_fusion:main',
+            'esp32_depth = epsilon_sensors.esp32_depth:main',
         ],
     },
 )

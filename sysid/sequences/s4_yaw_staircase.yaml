@@ -1,0 +1,18 @@
+# S4 yaw staircase: yaw authority + rotational drag + deadband from gyro_z
+# plateaus. Corners all-positive = CCW (viewed from above). Both directions.
+# Sub should stay roughly in place, spinning; depth drifts up slowly (buoyant).
+name: s4_yaw_staircase
+mode: thrust
+max_abs: 50.0
+steps:
+  - {dur: 3.0, thrust: [0, 0, 0, 0, 0, 0], label: baseline}
+  - {dur: 5.0, thrust: [0, 0, 10, 10, 10, 10], label: ccw10}
+  - {dur: 5.0, thrust: [0, 0, 20, 20, 20, 20], label: ccw20}
+  - {dur: 5.0, thrust: [0, 0, 30, 30, 30, 30], label: ccw30}
+  - {dur: 5.0, thrust: [0, 0, 40, 40, 40, 40], label: ccw40}
+  - {dur: 4.0, thrust: [0, 0, 0, 0, 0, 0], label: spin-down}
+  - {dur: 5.0, thrust: [0, 0, -10, -10, -10, -10], label: cw10}
+  - {dur: 5.0, thrust: [0, 0, -20, -20, -20, -20], label: cw20}
+  - {dur: 5.0, thrust: [0, 0, -30, -30, -30, -30], label: cw30}
+  - {dur: 5.0, thrust: [0, 0, -40, -40, -40, -40], label: cw40}
+  - {dur: 3.0, thrust: [0, 0, 0, 0, 0, 0], label: tail}

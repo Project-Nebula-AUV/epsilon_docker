@@ -25,6 +25,8 @@ setup(
             'sensor_bridge = epsilon_bridge.sensor_bridge:main',
             'thruster_bridge = epsilon_bridge.thruster_bridge:main',
             'arming_helper = epsilon_bridge.arming_helper:main',
+            'sysid_runner = epsilon_bridge.sysid_runner:main',
+            'sysid_logger = epsilon_bridge.sysid_logger:main',
         ],
     },
 )

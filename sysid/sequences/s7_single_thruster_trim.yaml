@@ -1,0 +1,67 @@
+# TRIM VARIANT (2026-07-06): verticals at -22 during rests + corner
+# blocks (buoyancy hold over the 95 s run); the t0/t1 vertical-pulse
+# steps stay PURE for isolation (sub bobs there — expected, short).
+# S7 single-thruster pulses: TRUE per-thruster direction vectors + moment arms
+# from the 6x(gyro, accel, depth-rate) response matrix. This is where "not
+# perfectly diagonal" and "curved motion" get numbers -> allocation refit.
+# Motor map: 0=left-vertical 1=right-vertical 2=rear-left 3=front-left
+# 4=front-right 5=rear-right. Run at mid-depth, away from walls.
+name: s7_single_thruster_trim
+mode: thrust
+max_abs: 50.0
+steps:
+  - {dur: 3.0, thrust: [-22, -22, 0, 0, 0, 0], label: baseline}
+  # t0 left-vertical
+  - {dur: 2.0, thrust: [20, 0, 0, 0, 0, 0], label: t0+20}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [-20, 0, 0, 0, 0, 0], label: t0-20}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [40, 0, 0, 0, 0, 0], label: t0+40}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [-40, 0, 0, 0, 0, 0], label: t0-40}
+  - {dur: 2.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest-long}
+  # t1 right-vertical
+  - {dur: 2.0, thrust: [0, 20, 0, 0, 0, 0], label: t1+20}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [0, -20, 0, 0, 0, 0], label: t1-20}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [0, 40, 0, 0, 0, 0], label: t1+40}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [0, -40, 0, 0, 0, 0], label: t1-40}
+  - {dur: 2.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest-long}
+  # t2 rear-left corner
+  - {dur: 2.0, thrust: [-22, -22, 20, 0, 0, 0], label: t2+20}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [-22, -22, -20, 0, 0, 0], label: t2-20}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [-22, -22, 40, 0, 0, 0], label: t2+40}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [-22, -22, -40, 0, 0, 0], label: t2-40}
+  - {dur: 2.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest-long}
+  # t3 front-left corner
+  - {dur: 2.0, thrust: [-22, -22, 0, 20, 0, 0], label: t3+20}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [-22, -22, 0, -20, 0, 0], label: t3-20}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [-22, -22, 0, 40, 0, 0], label: t3+40}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [-22, -22, 0, -40, 0, 0], label: t3-40}
+  - {dur: 2.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest-long}
+  # t4 front-right corner
+  - {dur: 2.0, thrust: [-22, -22, 0, 0, 20, 0], label: t4+20}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [-22, -22, 0, 0, -20, 0], label: t4-20}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [-22, -22, 0, 0, 40, 0], label: t4+40}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [-22, -22, 0, 0, -40, 0], label: t4-40}
+  - {dur: 2.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest-long}
+  # t5 rear-right corner
+  - {dur: 2.0, thrust: [-22, -22, 0, 0, 0, 20], label: t5+20}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [-22, -22, 0, 0, 0, -20], label: t5-20}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [-22, -22, 0, 0, 0, 40], label: t5+40}
+  - {dur: 1.5, thrust: [-22, -22, 0, 0, 0, 0], label: rest}
+  - {dur: 2.0, thrust: [-22, -22, 0, 0, 0, -40], label: t5-40}
+  - {dur: 3.0, thrust: [-22, -22, 0, 0, 0, 0], label: tail}

@@ -32,21 +32,55 @@ class SimulatorNode(Node):
             depth=1
         )
 
-        # Depth-sensor fusion mode. When on, the sim stops publishing
-        # ground-truth /sensors/depth and instead emulates the real (marginal)
-        # MS5837: a sparse, occasionally-corrupt /depth_raw plus the raw
-        # /imu + /imu/gravity that the depth_fusion node needs. depth_fusion
-        # (run alongside, /depth remapped to /sensors/depth) then reconstructs
-        # depth exactly as on hardware -- so the sim exercises the real fusion
-        # code path and can be checked against /sim/true_depth (always
-        # published). Default off: existing sim behavior is unchanged.
+        # Sensor-model calibration (2026-07-06, sysid W5): measured values live
+        # in sysid/sim_calibration.yaml `sensors:` — a value there becomes the
+        # DEFAULT of the matching parameter (CLI -p still wins). Missing file =
+        # the nominal defaults below = pre-calibration behavior.
+        self._cal = self._load_calibration_sensors()
+
+        def _cp(name, nominal):
+            return self.declare_parameter(name, self._cal.get(name, nominal)).value
+
+        # Depth source (2026-07-06 — matches the vehicle's new architecture):
+        #   truth  = ground-truth /sensors/depth (ideal mode, legacy default)
+        #   esp32  = emulate the MS5837-on-Xiao chain: ~7 Hz filtered updates
+        #            republished at 20 Hz ZOH (what nav sees via the
+        #            esp32_depth driver + sensor_bridge on hardware)
+        #   fused  = LEGACY marginal-MS5837-on-Pi emulation + external
+        #            depth_fusion node (kept runnable; fuse_depth:=true maps
+        #            here for back-compat)
+        self.depth_mode = str(self.declare_parameter('depth_mode', 'truth').value)
         self.fuse_depth = bool(self.declare_parameter('fuse_depth', False).value)
-        # Emulated depth-sensor characteristics (defaults reproduce the bench:
-        # ~1.2 good reads/s, multi-second gaps, ~a few % corrupt-but-ACKed).
+        if self.fuse_depth:
+            self.depth_mode = 'fused'
+        # Legacy fused-emulation characteristics (bench, pre-ESP32):
         self.depth_attempt_hz = float(self.declare_parameter('depth_attempt_hz', 8.0).value)
         self.depth_success_prob = float(self.declare_parameter('depth_success_prob', 0.16).value)
         self.depth_corrupt_prob = float(self.declare_parameter('depth_corrupt_prob', 0.04).value)
         self.depth_noise_std = float(self.declare_parameter('depth_noise_std', 0.02).value)
+        # ESP32-chain model (measured 2026-07-06, refit after S3):
+        self.esp32_update_hz = float(_cp('esp32_update_hz', 7.2))
+        self.esp32_noise_std = float(_cp('esp32_noise_std', 0.008))
+        self.esp32_gap_prob = float(_cp('esp32_gap_prob', 0.002))   # per update: filter eating an outlier burst
+        self.esp32_publish_hz = float(_cp('esp32_publish_hz', 20.0))
+        self._esp_depth = None
+        self._esp_vz = 0.0
+        self._esp_accum = 0.0
+        self._esp_pub_accum = 0.0
+        self._esp_gap_left = 0.0
+        # Attitude/IMU channel realism (nominal 0/off = ideal; calibration file
+        # carries the measured a4-rest values):
+        self.sensor_rate_hz = float(_cp('sensor_rate_hz', 0.0))    # 0 = every frame
+        self.sensor_gap_prob = float(_cp('sensor_gap_prob', 0.0))  # per sample
+        self.sensor_gap_s = float(_cp('sensor_gap_s', 0.45))
+        self.heading_noise_std = float(_cp('heading_noise_std', 0.0))  # deg
+        self.roll_noise_std = float(_cp('roll_noise_std', 0.0))        # deg
+        self.imu_gyro_noise_std = float(_cp('imu_gyro_noise_std', 0.0))    # rad/s
+        self.imu_accel_noise_std = float(_cp('imu_accel_noise_std', 0.0))  # m/s^2
+        self.imu_gyro_zero_prob = float(_cp('imu_gyro_zero_prob', 0.0))    # corrupt read => zeroed group
+        self.imu_accel_zero_prob = float(_cp('imu_accel_zero_prob', 0.0))
+        self._sensor_accum = 0.0
+        self._sensor_gap_left = 0.0
         # Hardware-faithful velocity: publish /sensors/velocity the way the
         # REAL vehicle senses it — x/y always zero (no DVL) and z from the
         # depth_fusion node's /depth_fusion/velocity_z (stale -> 0), instead
@@ -75,22 +109,49 @@ class SimulatorNode(Node):
         self._ctrl_pub     = self.create_publisher(String,            '/sim/control',      10)
         # Always-on ground-truth reference so fused depth can be scored in sim.
         self._true_depth_pub = self.create_publisher(Float32, '/sim/true_depth', 10)
-        # Raw hardware-side topics, published only in fusion mode.
-        if self.fuse_depth:
+        # Raw hardware-side topics, published only in legacy fused mode.
+        if self.depth_mode == 'fused':
             self._raw_imu_pub  = self.create_publisher(Imu, '/imu', 10)
             self._gravity_pub  = self.create_publisher(Vector3Stamped, '/imu/gravity', 10)
             self._depth_raw_pub = self.create_publisher(Float32, '/depth_raw', 10)
             self._depth_attempt_accum = 0.0
+        depth_desc = {
+            'truth': 'ground-truth passthrough /sensors/depth',
+            'esp32': 'ESP32-chain emulation (~%.1f Hz updates, %.0f Hz ZOH)'
+                     % (self.esp32_update_hz, self.esp32_publish_hz),
+            'fused': 'LEGACY fused via depth_fusion (emulated marginal MS5837)',
+        }.get(self.depth_mode, 'UNKNOWN MODE %r' % self.depth_mode)
         self.get_logger().info(
-            'simulator_node up (depth: %s)'
-            % ('FUSED via depth_fusion (emulated MS5837 on /depth_raw + /imu/gravity)'
-               if self.fuse_depth else 'ground-truth passthrough /sensors/depth'))
+            'simulator_node up (depth: %s; sensor rate: %s)'
+            % (depth_desc,
+               'every frame' if self.sensor_rate_hz <= 0
+               else '%.1f Hz emulated' % self.sensor_rate_hz))
 
         self.create_subscription(Float32MultiArray, '/thruster_commands', self._thruster_cb, self.qos)
         self.create_subscription(String, '/sub/status',   self._status_cb, 10)
         self.create_subscription(String, '/sim/control',  self._ctrl_cb,   10)
 
         self.sim = SubmarineSimulator()
+
+    def _load_calibration_sensors(self):
+        """`sensors:` section of sysid/sim_calibration.yaml (empty if absent)."""
+        import os
+        import yaml
+        path = os.environ.get('ROBOSUB_CALIBRATION',
+                              '/home/robosub/robosub_ws/sysid/sim_calibration.yaml')
+        try:
+            with open(path) as f:
+                cal = (yaml.safe_load(f) or {}).get('sensors') or {}
+            if cal:
+                print('[simulator_node] sensor calibration from %s: %s'
+                      % (path, sorted(cal)), flush=True)
+            return cal
+        except FileNotFoundError:
+            return {}
+        except Exception as e:
+            print('[simulator_node] calibration load FAILED (%s): %s' % (path, e),
+                  flush=True)
+            return {}
 
     def _fused_vz_cb(self, msg: Float32):
         self._fused_vz = float(msg.data)
@@ -133,31 +194,52 @@ class SimulatorNode(Node):
         if self.truth_log:
             self._write_truth(p)
 
-        # Depth: ground-truth passthrough, or emulated raw sensor for fusion.
-        if self.fuse_depth:
+        # Depth by source mode (see __init__).
+        if self.depth_mode == 'fused':
             self._publish_emulated_depth_raw(p.z, dt)
+        elif self.depth_mode == 'esp32':
+            self._publish_esp32_depth(p.z, dt)
         else:
             self._depth_pub.publish(Float32(data=float(p.z)))
 
-        self._heading_pub.publish(Float32(data=float(p.heading)))
-        self._roll_pub.publish(Float32(data=float(p.roll)))
+        # Attitude + IMU at the emulated hardware cadence (every frame when
+        # sensor_rate_hz <= 0), with the measured noise floors and the
+        # zeroed-group corrupt-read convention when calibrated.
+        if self._sensor_tick(dt):
+            heading = float(p.heading)
+            roll = float(p.roll)
+            if self.heading_noise_std > 0.0:
+                heading = (heading + random.gauss(0.0, self.heading_noise_std)) % 360.0
+            if self.roll_noise_std > 0.0:
+                roll += random.gauss(0.0, self.roll_noise_std)
+            self._heading_pub.publish(Float32(data=heading))
+            self._roll_pub.publish(Float32(data=roll))
 
-        imu_msg = Imu()
-        imu_msg.header.stamp = now
-        imu_msg.angular_velocity.z = float(imu.gyro_z)
-        imu_msg.angular_velocity.x = float(imu.gyro_x)
-        imu_msg.linear_acceleration.x = float(imu.accel_x)
-        imu_msg.linear_acceleration.y = float(imu.accel_y)
-        imu_msg.linear_acceleration.z = float(imu.accel_z)
-        self._imu_pub.publish(imu_msg)
+            imu_msg = Imu()
+            imu_msg.header.stamp = now
+            if random.random() >= self.imu_gyro_zero_prob:
+                n = self.imu_gyro_noise_std
+                imu_msg.angular_velocity.z = float(imu.gyro_z) + (random.gauss(0, n) if n > 0 else 0.0)
+                imu_msg.angular_velocity.x = float(imu.gyro_x) + (random.gauss(0, n) if n > 0 else 0.0)
+                imu_msg.angular_velocity.y = float(imu.gyro_y) + (random.gauss(0, n) if n > 0 else 0.0)
+            # else: corrupt read -> whole gyro group zeroed (driver convention)
+            if random.random() >= self.imu_accel_zero_prob:
+                n = self.imu_accel_noise_std
+                imu_msg.linear_acceleration.x = float(imu.accel_x) + (random.gauss(0, n) if n > 0 else 0.0)
+                imu_msg.linear_acceleration.y = float(imu.accel_y) + (random.gauss(0, n) if n > 0 else 0.0)
+                imu_msg.linear_acceleration.z = float(imu.accel_z) + (random.gauss(0, n) if n > 0 else 0.0)
+            self._imu_pub.publish(imu_msg)
 
-        if self.fuse_depth:
-            self._publish_raw_imu(imu, p.roll, now)
+            if self.depth_mode == 'fused':
+                self._publish_raw_imu(imu, p.roll, now)
 
         vel = Twist()
         if self.hw_velocity:
-            # As the real vehicle senses it: x/y zero (no DVL), z fused.
-            if (self._fused_vz_t is not None
+            # As the real vehicle senses it: x/y zero (no DVL), z from the
+            # depth chain (esp32 driver's derivative, or fusion in legacy mode).
+            if self.depth_mode == 'esp32':
+                vel.linear.z = float(self._esp_vz)
+            elif (self._fused_vz_t is not None
                     and (self.get_clock().now() - self._fused_vz_t).nanoseconds * 1e-9 < 1.0):
                 vel.linear.z = self._fused_vz
         else:
@@ -241,6 +323,52 @@ class SimulatorNode(Node):
         g.vector.y = 0.0
         g.vector.z = _G * cr
         self._gravity_pub.publish(g)
+
+    def _sensor_tick(self, dt):
+        """True when the emulated attitude/IMU chain delivers a sample.
+
+        rate <= 0 = every frame (ideal). Otherwise fire at sensor_rate_hz with
+        the measured occasional long dropout (a4 rest: one 0.45 s gap/10 min).
+        """
+        if self.sensor_rate_hz <= 0.0:
+            return True
+        if self._sensor_gap_left > 0.0:
+            self._sensor_gap_left -= dt
+            return False
+        self._sensor_accum += dt
+        if self._sensor_accum < 1.0 / self.sensor_rate_hz:
+            return False
+        self._sensor_accum = 0.0
+        if self.sensor_gap_prob > 0.0 and random.random() < self.sensor_gap_prob:
+            self._sensor_gap_left = self.sensor_gap_s
+        return True
+
+    def _publish_esp32_depth(self, true_z, dt):
+        """Emulate what NAV SEES from the ESP32 depth chain (2026-07-06 HW):
+        the esp32_depth driver filters a ~7 Hz JSON stream and republishes the
+        latest accepted depth at 20 Hz (zero-order hold), plus a low-passed
+        vertical velocity. Occasional outliers are REJECTED by the driver's
+        filter, which downstream just experiences as a short update gap --
+        modeled by esp32_gap_prob. Measured bench 2026-07-06; refit after S3."""
+        if self._esp_gap_left > 0.0:
+            self._esp_gap_left -= dt
+        else:
+            self._esp_accum += dt
+            interval = 1.0 / self.esp32_update_hz
+            if self._esp_accum >= interval:
+                self._esp_accum = 0.0
+                prev = self._esp_depth
+                self._esp_depth = true_z + random.gauss(0.0, self.esp32_noise_std)
+                if prev is not None:
+                    v = (self._esp_depth - prev) * self.esp32_update_hz
+                    v = max(-1.5, min(1.5, v))
+                    self._esp_vz += 0.5 * (v - self._esp_vz)   # driver's low-pass
+                if random.random() < self.esp32_gap_prob:
+                    self._esp_gap_left = random.uniform(0.3, 0.8)
+        self._esp_pub_accum += dt
+        if self._esp_depth is not None and self._esp_pub_accum >= 1.0 / self.esp32_publish_hz:
+            self._esp_pub_accum = 0.0
+            self._depth_pub.publish(Float32(data=float(self._esp_depth)))
 
     def _publish_emulated_depth_raw(self, true_z, dt):
         """Emulate the marginal MS5837: sparse, noisy, occasionally corrupt.

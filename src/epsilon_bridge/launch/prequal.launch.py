@@ -43,8 +43,11 @@ def generate_launch_description():
     args = [
         DeclareLaunchArgument('synthetic_depth', default_value='-1.0'), # real depth passthrough
         DeclareLaunchArgument('heave_bias', default_value='0.0'),       # buoyancy trim
-        DeclareLaunchArgument('with_depth', default_value='true'),      # fused MS5837 depth
-        DeclareLaunchArgument('world_z_sign', default_value='1.0'),     # depth_fusion sign
+        DeclareLaunchArgument('with_depth', default_value='true'),      # real depth chain on
+        # esp32 (default) = MS5837 via Xiao ESP32-C3 USB serial (filtered, no
+        # fusion); i2c = legacy Pi-I2C MS5837 + depth_fusion chain.
+        DeclareLaunchArgument('depth_source', default_value='esp32'),
+        DeclareLaunchArgument('world_z_sign', default_value='1.0'),     # depth_fusion sign (i2c only)
         DeclareLaunchArgument('gray_world', default_value='false'),     # camera tint fix
     ]
 
@@ -52,6 +55,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(os.path.join(share, 'launch', 'hardware.launch.py')),
         launch_arguments={
             'with_depth': LaunchConfiguration('with_depth'),
+            'depth_source': LaunchConfiguration('depth_source'),
             'synthetic_depth': LaunchConfiguration('synthetic_depth'),
             'heave_bias': LaunchConfiguration('heave_bias'),
             'world_z_sign': LaunchConfiguration('world_z_sign'),

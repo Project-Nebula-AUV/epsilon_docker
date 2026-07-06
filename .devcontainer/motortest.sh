@@ -67,7 +67,7 @@ source "${WS}/install/setup.bash"
 echo "[prequal] clean slate: stopping any stale stack..."
 for pat in "[o]mni_control" "epsilon_bridge/[s]ensor_bridge" "epsilon_bridge/[t]hruster_bridge" \
            "epsilon_bridge/[a]rming_helper" "epsilon_sensors/[c]amera" "epsilon_sensors/[i]mu" \
-           "epsilon_sensors/[d]epth_sensor" "[s]ubmarine_node" "[r]ecord_video" \
+           "epsilon_sensors/[d]epth_sensor" "epsilon_sensors/[d]epth_fusion" "epsilon_sensors/[e]sp32_depth" "[s]ubmarine_node" "[r]ecord_video" \
            "[r]os2 launch epsilon_bridge"; do
   pkill -9 -f "$pat" 2>/dev/null || true
 done
@@ -75,7 +75,7 @@ sleep 2   # let the kernel release /dev/video0 and the I2C buses
 
 # The USB camera node (/dev/video0,1) needs RW access; open the device nodes
 # (container sudo is passwordless). Harmless if already RW.
-sudo chmod a+rw /dev/video0 /dev/video1 2>/dev/null || true
+sudo chmod a+rw /dev/video0 /dev/video1 /dev/ttyACM0 2>/dev/null || true
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. PREFLIGHT — fail fast with the fix if a known-ephemeral dependency is gone.

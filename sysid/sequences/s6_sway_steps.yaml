@@ -1,0 +1,16 @@
+# S6 sway steps at the gate: sway thrust/drag from gate bearing/width drift.
+# Start ~4 m from the gate, facing it, gate centered. Alternating directions
+# so the sub stays near the start line.
+name: s6_sway_steps
+mode: wrench
+max_abs: 60.0
+steps:
+  - {dur: 3.0, wrench: [0, 0, 0, 0, 0], label: baseline-gate-visible}
+  - {dur: 5.0, wrench: [0, 0.20, 0, 0, 0], label: sway20-right}
+  - {dur: 4.0, wrench: [0, 0, 0, 0, 0], label: coast1}
+  - {dur: 5.0, wrench: [0, -0.20, 0, 0, 0], label: sway20-left}
+  - {dur: 4.0, wrench: [0, 0, 0, 0, 0], label: coast2}
+  - {dur: 5.0, wrench: [0, 0.35, 0, 0, 0], label: sway35-right}
+  - {dur: 4.0, wrench: [0, 0, 0, 0, 0], label: coast3}
+  - {dur: 5.0, wrench: [0, -0.35, 0, 0, 0], label: sway35-left}
+  - {dur: 4.0, wrench: [0, 0, 0, 0, 0], label: tail-coast}

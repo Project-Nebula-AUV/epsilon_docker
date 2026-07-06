@@ -1,0 +1,23 @@
+# S9 roll authority: vertical-differential pulses -> roll angle reached vs the
+# (deliberately small) righting moment. Feeds the style-roll strategy directly:
+# if +/-100 doesn't pass ~90 deg, the maneuver needs a resonance pump. The
+# zero gaps double as free tilt-release decays (righting freq + damping).
+# vp=t0 left-vertical, vs=t1 right-vertical; [+,-] rolls one way, [-,+] the
+# other (sign convention confirmed via /sensors/roll in the run log).
+name: s9_roll_authority
+mode: thrust
+max_abs: 100.0
+steps:
+  - {dur: 3.0, thrust: [0, 0, 0, 0, 0, 0], label: baseline}
+  - {dur: 2.0, thrust: [40, -40, 0, 0, 0, 0], label: roll+40}
+  - {dur: 4.0, thrust: [0, 0, 0, 0, 0, 0], label: release1}
+  - {dur: 2.0, thrust: [-40, 40, 0, 0, 0, 0], label: roll-40}
+  - {dur: 4.0, thrust: [0, 0, 0, 0, 0, 0], label: release2}
+  - {dur: 2.0, thrust: [70, -70, 0, 0, 0, 0], label: roll+70}
+  - {dur: 4.0, thrust: [0, 0, 0, 0, 0, 0], label: release3}
+  - {dur: 2.0, thrust: [-70, 70, 0, 0, 0, 0], label: roll-70}
+  - {dur: 4.0, thrust: [0, 0, 0, 0, 0, 0], label: release4}
+  - {dur: 2.5, thrust: [100, -100, 0, 0, 0, 0], label: roll+100}
+  - {dur: 5.0, thrust: [0, 0, 0, 0, 0, 0], label: release5}
+  - {dur: 2.5, thrust: [-100, 100, 0, 0, 0, 0], label: roll-100}
+  - {dur: 5.0, thrust: [0, 0, 0, 0, 0, 0], label: tail}

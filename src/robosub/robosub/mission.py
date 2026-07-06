@@ -24,11 +24,11 @@ from robosub.sub.tasks.shutdown_task import ShutdownTask
 from robosub.sub.tasks.slalom_task import SlalomTask
 from robosub.sub.tasks.sweep_task import SweepForSlalomTask
 
-MISSION_DEPTH = 1.5    # m — running depth
+MISSION_DEPTH = float(os.environ.get('ROBOSUB_MISSION_DEPTH', '1.5'))  # m — running depth (pool venue: set 0.8)
 SURFACE_DEPTH = 0.1    # m — end of run
 # Gate crossing depth: centered between the bar (~1.0 m) and the floor
 # (~2.1 m) so the hull clears with margin both ways.
-GATE_CENTER_DEPTH = 1.55
+GATE_CENTER_DEPTH = float(os.environ.get('ROBOSUB_GATE_DEPTH', '1.55'))  # pool venue: ~1.0 (bar 0.5, floor 1.52)
 
 
 def create_mission():

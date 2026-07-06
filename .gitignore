@@ -13,3 +13,13 @@ src/mhsboat_ctrl/
 src/rviz-plugin-zed-od/
 core.*_gui_frames/
 *.swp
+
+# sysid: raw run data stays on the sub (source of truth, large binaries)
+sysid/runs/
+# timestamped safety backups (parallel to git history)
+*.pre-*
+*.bak
+*.bak-*
+*.swp
+__pycache__/
+*.pyc

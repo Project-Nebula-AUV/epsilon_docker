@@ -1,0 +1,22 @@
+# TRIM VARIANT (2026-07-06): constant -22/-22 on the verticals throughout —
+# holds the ~+1 N buoyant hull at depth over the 55 s run (June static
+# hold ≈ -23). Constant + logged, so the yaw fit is unaffected; refit
+# the trim value itself from S3.
+# S4 yaw staircase: yaw authority + rotational drag + deadband from gyro_z
+# plateaus. Corners all-positive = CCW (viewed from above). Both directions.
+# Sub should stay roughly in place, spinning; depth drifts up slowly (buoyant).
+name: s4_yaw_staircase_trim
+mode: thrust
+max_abs: 50.0
+steps:
+  - {dur: 3.0, thrust: [-22, -22, 0, 0, 0, 0], label: baseline}
+  - {dur: 5.0, thrust: [-22, -22, 10, 10, 10, 10], label: ccw10}
+  - {dur: 5.0, thrust: [-22, -22, 20, 20, 20, 20], label: ccw20}
+  - {dur: 5.0, thrust: [-22, -22, 30, 30, 30, 30], label: ccw30}
+  - {dur: 5.0, thrust: [-22, -22, 40, 40, 40, 40], label: ccw40}
+  - {dur: 4.0, thrust: [-22, -22, 0, 0, 0, 0], label: spin-down}
+  - {dur: 5.0, thrust: [-22, -22, -10, -10, -10, -10], label: cw10}
+  - {dur: 5.0, thrust: [-22, -22, -20, -20, -20, -20], label: cw20}
+  - {dur: 5.0, thrust: [-22, -22, -30, -30, -30, -30], label: cw30}
+  - {dur: 5.0, thrust: [-22, -22, -40, -40, -40, -40], label: cw40}
+  - {dur: 3.0, thrust: [-22, -22, 0, 0, 0, 0], label: tail}

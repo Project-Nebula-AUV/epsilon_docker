@@ -110,8 +110,13 @@ class SubmarineSimulator:
                 # depth was randomized independent of height, which left the
                 # bottoms floating 0.3-0.6m short of the floor instead of
                 # planted in it).
-                pole_height = 0.9 + random.uniform(0.3, 0.6)
-                z_top = self.config.worldDepth - pole_height
+                # RoboSub 2026 official: slalom pipes are 1 in PVC, 3 ft
+                # (0.9 m) long, moored to the floor (buoyant). In shallow
+                # water they stand from the floor; in deep water they float
+                # moored with tops ~1.2 m down (mooring depth UNSPECIFIED
+                # officially -- 1.2 m is an assumption near mission depth).
+                pole_height = 0.9
+                z_top = min(self.config.worldDepth - pole_height, 1.2)
                 self.slalom_poles += [
                     SlalomPole(x=sx, y=y - spacing, z=z_top, height=pole_height, color=WHITE),
                     SlalomPole(x=sx, y=y,           z=z_top, height=pole_height, color=RED),
@@ -177,6 +182,7 @@ class SubmarineSimulator:
         drag_heave = -self.config.heaveDragCoeff * vel_heave * abs(vel_heave)
         drag_yaw   = -self.config.angularDragCoeff_Z * self.subPhysics.angular_velocity_z**2 * np.sign(self.subPhysics.angular_velocity_z)
         drag_roll  = -self.config.angularDragCoeff_X * self.subPhysics.angular_velocity_x**2 * np.sign(self.subPhysics.angular_velocity_x)
+        drag_pitch = -self.config.angularDragCoeff_Y * self.subPhysics.angular_velocity_y**2 * np.sign(self.subPhysics.angular_velocity_y)
         # Rotate body-frame sway/heave thrust through roll so thrusters on an
         # inverted sub push the right way in the world frame (matters for the
         # style-roll maneuver; identity when roll = 0).
@@ -184,24 +190,41 @@ class SubmarineSimulator:
         cos_r, sin_r = math.cos(r_rad), math.sin(r_rad)
         thrust_heave_w = thrust_sway * sin_r + thrust_heave * cos_r
         thrust_sway_w  = thrust_sway * cos_r - thrust_heave * sin_r
+        # Passive pitch DOF (2026-07-06, sysid W5): no pitch actuators exist —
+        # pitch is driven by the surge→bow-up coupling (the #1 measured
+        # real-vs-sim gap), restored by the (deliberately small) righting
+        # moment, damped by quadratic drag. Roll gets its righting moment the
+        # same way — the style roll now costs real torque. Params are NOMINAL
+        # priors until the S2/S5 fits land in sim_calibration.yaml.
+        p_rad = math.radians(self.subPhysics.pitch)
+        thrust_pitch = (self.config.surgePitchCoupling * thrust_surge
+                        + self.config.surgePitchVelCoupling * vel_surge * abs(vel_surge))
+        righting_pitch = -self.config.pitchRightingMoment * math.sin(p_rad)
+        righting_roll = -self.config.rollRightingMoment * math.sin(r_rad)
         total_force_surge = thrust_surge + drag_surge
         total_force_sway  = thrust_sway_w + drag_sway
         total_force_heave = thrust_heave_w + drag_heave
         total_torque_yaw  = thrust_yaw + drag_yaw
-        total_torque_roll = thrust_roll + drag_roll
+        total_torque_roll = thrust_roll + drag_roll + righting_roll
+        total_torque_pitch = thrust_pitch + righting_pitch + drag_pitch
         fx = total_force_surge * cos_h - total_force_sway * sin_h
         fy = total_force_surge * sin_h + total_force_sway * cos_h
-        fz = total_force_heave - self.netBuoyancyForce
+        # Bow-up pitch tilts the surge thrust line: its world-vertical
+        # component lifts the vehicle (z is down+), which is exactly why the
+        # real sub needs extra down-thrust while surging.
+        fz = total_force_heave - self.netBuoyancyForce - thrust_surge * math.sin(p_rad)
         ax = fx / self.subMass
         ay = fy / self.subMass
         az = fz / self.subMass
         angular_accel_z = total_torque_yaw  / self.subInertia_Z
         angular_accel_x = total_torque_roll / self.subInertia_X
+        angular_accel_y = total_torque_pitch / self.subInertia_Y
         self.subPhysics.velocity_x += ax * dt
         self.subPhysics.velocity_y += ay * dt
         self.subPhysics.velocity_z += az * dt
         self.subPhysics.angular_velocity_z += angular_accel_z * dt
         self.subPhysics.angular_velocity_x += angular_accel_x * dt
+        self.subPhysics.angular_velocity_y += angular_accel_y * dt
         imu_accel_surge = ax * cos_h + ay * sin_h
         imu_accel_sway = -ax * sin_h + ay * cos_h
         imu_accel_heave = az
@@ -209,6 +232,7 @@ class SubmarineSimulator:
             accel_x=imu_accel_sway, accel_y=imu_accel_surge, accel_z=imu_accel_heave,
             gyro_z=self.subPhysics.angular_velocity_z,
             gyro_x=self.subPhysics.angular_velocity_x,
+            gyro_y=self.subPhysics.angular_velocity_y,
         )
         prev_x = self.subPhysics.x
         self.subPhysics.x += self.subPhysics.velocity_x * dt
@@ -220,6 +244,13 @@ class SubmarineSimulator:
         self.subPhysics.roll = ((self.subPhysics.roll
                                  + math.degrees(self.subPhysics.angular_velocity_x * dt)
                                  + 180.0) % 360.0) - 180.0
+        # Pitch is passive and small; clip well short of ±90 so the camera
+        # projection never degenerates (a real bow-up under surge is ~5-20°).
+        self.subPhysics.pitch = float(np.clip(
+            self.subPhysics.pitch + math.degrees(self.subPhysics.angular_velocity_y * dt),
+            -75.0, 75.0))
+        if abs(self.subPhysics.pitch) >= 75.0:
+            self.subPhysics.angular_velocity_y = 0.0
         margin = 0.5
         self.subPhysics.x = np.clip(self.subPhysics.x, margin, self.config.worldWidth - margin)
         self.subPhysics.y = np.clip(self.subPhysics.y, margin, self.config.worldHeight - margin)
@@ -283,7 +314,10 @@ class SubmarineSimulator:
              half_w = g.width / 2
              pole_color = g.color
              bar_z = g.z_top
-             pole_z_bottom = self.config.worldDepth - 0.01
+             # 2026 gate posts are 1.5 m long (gate floats; posts do NOT
+             # reach the floor). Vision post-height cues depend on this.
+             pole_z_bottom = min(self.config.worldDepth - 0.01,
+                                 g.z_top + g.height)
              l_bar = self.project3D((g.x, g.center_y - half_w, bar_z))
              r_bar = self.project3D((g.x, g.center_y + half_w, bar_z))
              l_bot = self.project3D((g.x, g.center_y - half_w, pole_z_bottom))
