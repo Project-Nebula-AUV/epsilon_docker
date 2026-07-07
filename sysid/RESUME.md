@@ -160,14 +160,24 @@ this stream via the new `esp32_depth` driver (epsilon_sensors):
   full course before trusting any nav behavior; expect standoff/FOV-loss logic
   and thrusterMaxForce (0.8 N nominal, clearly low for a 10 kg vehicle — S3/S7
   fit) to need W6 attention.
-- A3 DONE (2026-07-06): **camera horizontal FOV MEASURED = 26.9°** (3 ft PVC at
-  8 ft spans 251/320 px → f=669 px; cross-checked by predicted+observed frame
-  overflow at 5 ft, two captures). The sim assumed 70° — the 320×240 mode
-  center-crops the sensor. Now in sim_calibration.yaml (`sim: cameraFov`).
-  MISSION IMPLICATIONS: all range-from-width was 2.6× off; the 2 m gate fills
-  the real frame at ~4.3 m standoff (not ~1.4 m) — CenterOnGateHalf standoffs,
-  FOV-loss fallbacks, and S5/S6 gate-visibility distances must be rechecked
-  under 26.9°; W6 re-tune runs the sim with this value (loads automatically).
+- A3 SUPERSEDED 2026-07-06 PM4 — **camera reconfigured to 640×320, HFOV = 74°
+  (user-measured manually)**. History: the original A3 result (26.9°) was a
+  REAL measurement OF THE OLD 320×240 capture mode, which the OV9782 driver
+  center-crops. camera.py defaults now 640×320; the driver only offers
+  full-res modes, so frames capture 1280×720 (MJPG) and downscale — full
+  sensor width → full FOV. TWO camera-node fixes landed with this:
+  (a) resize-before-rotate (~4× cheaper); (b) **rclpy publish fast path:
+  msg.data = array("B", bytes) — assigning raw bytes runs rclpy's per-element
+  validator, 93 ms/frame, which alone capped the node at 10 Hz.** Verified:
+  640×320 @ 29.8 Hz published; upside-down mount handled (ROTATE_180 in the
+  node, orientation confirmed on a live frame). cameraFov 74.0 in
+  sim_calibration.yaml. The earlier "AcquireTarget fails at 3 m" W6 finding is
+  RESOLVED by the real FOV — HW-faithful gate run COMPLETES again (274.7 s,
+  crossed at z=1.55; style roll still honestly stalls ~49°). WATCH for W6
+  vision refit: sim renders 320×240 while hardware publishes 640×320 —
+  fraction-based logic is unaffected, but any PIXEL-count threshold (min blob
+  area, px tolerances) sees 2× linear scale on hardware. Backup:
+  camera.py.pre-res640.*.
 - A5 DONE (2026-07-06, LIVE bench, props free): motor map USER-CONFIRMED all 6
   (0=LV 1=RV 2=RL 3=FL 4=FR 5=RR, correct prop every block); airflow directions
   EXACTLY match allocation.yaml (verticals: + = air down = thrust up, consistent

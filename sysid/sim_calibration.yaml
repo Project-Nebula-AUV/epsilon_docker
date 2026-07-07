@@ -7,11 +7,13 @@
 # Path override: ROBOSUB_CALIBRATION (default /home/robosub/robosub_ws/sysid/sim_calibration.yaml)
 
 sim:
-  # Camera horizontal FOV (deg), MEASURED A3 2026-07-06: 3ft PVC (0.9144 m)
-  # horizontal at 8 ft (2.438 m) spans 251 px of 320 -> f=669 px -> 26.9 deg
-  # (cross-checked: predicts frame overflow at 5 ft, observed in 2 captures).
-  # The 320x240 mode center-crops the sensor; sim previously assumed 70!
-  cameraFov: 26.9
+  # Camera horizontal FOV (deg): 74.0 USER-MEASURED manually 2026-07-06 at
+  # the NEW 640x320 config (full-frame 1280x720 capture downscaled -> full
+  # sensor width; matches OV9782 spec). The earlier 26.9 deg was a real
+  # measurement OF THE OLD 320x240 capture mode (cropped) -- mode-dependent,
+  # superseded when camera.py defaults moved to 640x320 (29.8 Hz after the
+  # rclpy bytes-validator publish fix).
+  cameraFov: 74.0
   # --- SimulationConfig overrides (dynamics) ---
   # A2 bench measurements 2026-07-06 (sysid/bench_measurements.yaml):
   subMass: 9.98            # MEASURED 22 lb as-diving (sim default was 4.0!)

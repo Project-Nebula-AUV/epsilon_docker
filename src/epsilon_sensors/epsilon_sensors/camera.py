@@ -75,6 +75,8 @@ Runtime control via topic
 import json
 import time
 
+import array
+
 import cv2
 import numpy as np
 import rclpy
@@ -115,8 +117,8 @@ class CameraInput(Node):
 
         # ── Declare all parameters ────────────────────────────────────────
         self.declare_parameter("device",   0)
-        self.declare_parameter("width",    320)
-        self.declare_parameter("height",   240)
+        self.declare_parameter("width",    640)  # 2026-07-06: 640-wide mode, HFOV 74 deg (user-measured); 320x240 mode cropped to ~27 deg
+        self.declare_parameter("height",   320)
         self.declare_parameter("fps",      30.0)
         self.declare_parameter("frame_id", "camera")
 
@@ -196,6 +198,9 @@ class CameraInput(Node):
             self.cap = None
 
         cap = cv2.VideoCapture(self.device, cv2.CAP_V4L2)
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        # MJPG transport: without it the USB link caps full-res capture
+        # well below the sensor rate (the driver ignores sub-720p sizes).
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH,  self.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
@@ -335,10 +340,14 @@ class CameraInput(Node):
         # A good frame: clear the failure streak.
         self._consec_fail = 0
 
-        frame = cv2.rotate(frame, cv2.ROTATE_180)
-
+        # Resize FIRST, rotate the small frame (same result, ~4x cheaper:
+        # the OV9782 only offers full-res modes, so every frame arrives 1280
+        # wide and the old rotate-then-resize order cost 10 Hz at 640x320).
         if frame.shape[1] != self.width or frame.shape[0] != self.height:
-            frame = cv2.resize(frame, (self.width, self.height))
+            frame = cv2.resize(frame, (self.width, self.height),
+                               interpolation=cv2.INTER_AREA)
+
+        frame = cv2.rotate(frame, cv2.ROTATE_180)  # camera mounted upside down
 
         if bool(self.get_parameter("gray_world").value):
             frame = self._gray_world_balance(frame)
@@ -351,7 +360,11 @@ class CameraInput(Node):
         msg.encoding     = "bgr8"
         msg.is_bigendian = 0
         msg.step         = self.width * 3
-        msg.data         = frame.tobytes()
+        # array("B") is the rclpy fast path: assigning raw bytes to msg.data
+        # walks a per-element validator (~93 ms for a 640x320 frame -- that
+        # single line capped the camera at 10 Hz); the array assignment is a
+        # straight memcpy.
+        msg.data         = array.array("B", frame.tobytes())
         self.pub.publish(msg)
 
     # ── Cleanup ───────────────────────────────────────────────────────────────
