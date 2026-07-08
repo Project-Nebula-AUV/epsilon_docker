@@ -1,0 +1,87 @@
+[run] HW-FAITHFUL sensing (ESP32 depth-chain emulation + zeroed lateral velocity)
+[run] epsilon-plant actuation: 1
+[run] mode=gate hw_faithful=1 started (attempt 1) — watch http://epsilon:8765
+t=   1.93s  StabilizeTask|STABILIZING (4.4/3.0s)
+t=   1.93s  GateTask|GateTask[1]:DiveToDepth(1.6m)
+t=   3.09s  GateTask|GateTask[2]:AcquireTarget(gate 0s)
+t=   3.16s  GateTask|GateTask[4]:Stabilize
+t=   6.16s  GateTask|GateTask[5]:CenterOnGateHalf(right ok:0)
+t=  41.19s  GateTask|GateTask[6]:Stabilize
+t=  42.69s  GateTask|GateTask[7]:CenterOnGateHalf(right ok:1)
+t=  82.69s  GateTask|GateTask[8]:StyleRollSubtask(-0/360 pump) T!1
+t= 121.77s  GateTask|GateTask[8]:StyleRollSubtask(+100/360 carry) T!1
+t= 127.67s  GateTask|GateTask[9]:Stabilize T!2
+t= 129.25s  GateTask|GateTask[10]:TurnToHeading(359 deg) T!2
+t= 129.32s  GateTask|GateTask[11]:CenterOnGateHalf(right ok:0) T!2
+t= 142.71s  GateTask|GateTask[12]:StyleRollSubtask(-0/360 pump) T!2
+t= 187.69s  GateTask|GateTask[13]:Stabilize T!3
+t= 189.42s  GateTask|GateTask[15]:CenterOnGateHalf(right ok:0) T!3
+t= 229.41s  GateTask|GateTask[16]:Stabilize T!4
+t= 230.89s  GateTask|GateTask[17]:DriveThroughGate(right track) T!4
+t= 233.09s  GateTask|GateTask[17]:DriveThroughGate(right clear) T!4
+t= 237.09s  StabilizeTask|STABILIZING (0.0/3.0s)
+t= 240.09s  MISSION_COMPLETE|
+---
+task sequence: StabilizeTask -> GateTask -> StabilizeTask -> MISSION_COMPLETE
+RESULT: completed WITH timeout valves (not a clean pass)
+./run_course.sh: line 97:  3110 Killed                  ros2 run robosub sim_gui_node $SIM_ARGS > /tmp/run_sim.log 2>&1
+./run_course.sh: line 97:  3111 Killed                  PYTHONUNBUFFERED=1 ros2 run robosub submarine_node > /tmp/run_sub.log 2>&1
+=== submarine log tail ===
+INFO: control params loaded from /home/robosub/robosub_ws/build/robosub/config/pid_params.yaml
+INFO: task StabilizeTask completed
+INFO: course reference locked at 359.1 deg
+INFO: DiveToDepth -> 1.55 m
+WARN: CenterOnGateHalf TIMEOUT after 40s — completing (safety valve)
+INFO: StyleRoll 360 deg at 1.55 m, axis 359.1 (pump mode)
+INFO: StyleRoll pump -> carry at +100 deg
+WARN: StyleRollSubtask TIMEOUT after 45s — completing (safety valve)
+INFO: StyleRoll 360 deg at 1.55 m, axis 359.1 (pump mode)
+WARN: StyleRollSubtask TIMEOUT after 45s — completing (safety valve)
+WARN: CenterOnGateHalf TIMEOUT after 40s — completing (safety valve)
+INFO: task GateTask completed
+INFO: task StabilizeTask completed
+INFO: ShutdownTask — zero thrust.
+INFO: task ShutdownTask completed
+=== judge ===
+=== RUN: 0.0s .. 250.2s (14530 samples) ===
+
+--- STATE TIMELINE (dur > 0.5s; * = >60s HANG-SUSPECT) ---
+    0.0s +   7.5s  WAITING                  Press Start to begin
+    7.5s +   4.5s  StabilizeTask            STABILIZING (#/#s)
+   12.0s +   1.1s  GateTask                 GateTask[#]:DiveToDepth(#m)
+   13.3s +   3.0s  GateTask                 GateTask[#]:Stabilize
+   16.3s +  35.0s  GateTask                 GateTask[#]:CenterOnGateHalf(right ok:#)
+   51.3s +   1.5s  GateTask                 GateTask[#]:Stabilize
+   52.8s +  40.0s  GateTask                 GateTask[#]:CenterOnGateHalf(right ok:#)
+   92.8s +  39.1s  GateTask                 GateTask[#]:StyleRollSubtask(#/# pump) T!
+  131.9s +   5.9s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  137.8s +   1.5s  GateTask                 GateTask[#]:Stabilize T!
+  139.4s +  13.3s  GateTask                 GateTask[#]:CenterOnGateHalf(right ok:#) T!
+  152.8s +  45.0s  GateTask                 GateTask[#]:StyleRollSubtask(#/# pump) T!
+  197.8s +   1.7s  GateTask                 GateTask[#]:Stabilize T!
+  199.5s +  40.0s  GateTask                 GateTask[#]:CenterOnGateHalf(right ok:#) T!
+  239.5s +   1.5s  GateTask                 GateTask[#]:Stabilize T!
+  241.0s +   2.1s  GateTask                 GateTask[#]:DriveThroughGate(right track) T!
+  243.2s +   4.0s  GateTask                 GateTask[#]:DriveThroughGate(right clear) T!
+  247.2s +   3.0s  StabilizeTask            STABILIZING (#/#s)
+
+--- GATE (x=10.0, center_y=7.5, half-centers y=6.75/8.25, opening z>0.2) ---
+  244.6s OUT  y=6.66 (off-center -0.84 m; right(y<c), off-half-center -0.09 m)  z=1.52 during GateTask
+
+--- STYLE ROLL ---
+span    92.8s..  197.8s (105.0s)  net roll -43 deg (peak excursion 75)
+pre-roll pose x=6.60 y=6.81 z=1.55 hdg=359.3
+max drift during roll: dx=1.19 dy=1.36 dz=0.03 m, max heading dev 1.4 deg
+at roll end: dx=+0.27 dy=-0.93 dz=-0.00 hdg dev -0.8 roll=-36.6
+at drive-through start (t=241.0): dx=-1.50 dy=-0.10 dz=-0.00 hdg dev +1.2
+
+--- SLALOM GATELETS ---
+  248.3s OUT  x= 18.0 y=6.40 right(y<red) OUTSIDE-GAP off-gap-mid -0.93 m, nearest pole 0.16 m (StabilizeTask)
+
+--- DEPTH BY TASK (target 1.5, gate legs 1.55) ---
+WAITING                  z mean 0.01  min 0.00  max 0.10
+StabilizeTask            z mean 1.16  min 0.01  max 1.55
+GateTask                 z mean 1.56  min 1.48  max 1.69
+
+--- END: t=250.2s task=StabilizeTask state=STABILIZING (3.0/3.0s)
+    pose x=20.52 y=6.32 z=1.50 hdg=357.5 roll=-0.0

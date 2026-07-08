@@ -81,6 +81,9 @@ class Esp32Depth(Node):
         self.pub_depth = self.create_publisher(Float32, '/depth', 10)
         self.pub_vz = self.create_publisher(Float32, '/esp32_depth/velocity_z', 10)
         self.pub_stale = self.create_publisher(Bool, '/esp32_depth/stale', 10)
+        # F14 (2026-07-07): sensor temperature, for diagnosing the ~0.2 m
+        # air<->water baseline transient. One line per accepted parse.
+        self.pub_temp = self.create_publisher(Float32, '/esp32_depth/temperature', 10)
 
         self._lock = threading.Lock()
         self._depth = None          # last ACCEPTED filtered depth (m, down+)
@@ -222,6 +225,7 @@ class Esp32Depth(Node):
 
         z_raw = (p - self._surface_p) * self.m_per_mbar
         self.pub_raw.publish(Float32(data=float(z_raw)))
+        self.pub_temp.publish(Float32(data=float(t)))
 
         # median-of-3 kills isolated spikes at the cost of ~1 sample lag
         self._median3.append(z_raw)

@@ -49,8 +49,11 @@ class GateTask(Task):
                 seg = min(360.0, remaining)
                 remaining -= seg
                 subtasks += [
-                    CenterOnGateHalf(side=side, rate_tol=0.02,
-                                     hold_ticks=24),
+                    # Tighter than default (roll wants a quiet start) but
+                    # achievable under the measured compass noise — the old
+                    # 0.02/24 was impossible and always burned the timeout.
+                    CenterOnGateHalf(side=side, rate_tol=0.06,
+                                     hold_ticks=12),
                     StyleRollSubtask(degrees=seg,
                                      timeout=style_roll_timeout / 2),
                     Stabilize(duration=1.5),

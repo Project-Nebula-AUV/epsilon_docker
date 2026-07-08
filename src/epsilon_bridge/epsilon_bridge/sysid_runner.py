@@ -3,7 +3,7 @@ import yaml
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
-from std_msgs.msg import Float64MultiArray, String
+from std_msgs.msg import Float64MultiArray, String, Empty
 from std_srvs.srv import SetBool
 from ament_index_python.packages import get_package_share_directory
 
@@ -45,6 +45,14 @@ class SysidRunner(Node):
         super().__init__('sysid_runner')
         seq_path = str(self.declare_parameter('sequence_file', '').value)
         self.rate_hz = float(self.declare_parameter('rate_hz', 50.0).value)
+        # 2026-07-07: in-node arming countdown. The '~/go' trigger is fired
+        # ONCE on land (WiFi up) by sysid_run.sh; the node then counts down
+        # countdown_s internally and self-arms with NO further ROS/CLI/network
+        # activity -- so submerging (which drops the sub's WiFi) mid-countdown
+        # cannot break arming. countdown_s<=0 => '~/go' arms immediately (DRY).
+        self.countdown_s = float(self.declare_parameter('countdown_s', 0.0).value)
+        self._countdown_left = None   # int seconds remaining, or None when idle
+        self._countdown_timer = None
         alloc_path = str(self.declare_parameter('allocation_file', '').value)
         if not seq_path:
             raise RuntimeError('sequence_file param is required')
@@ -65,6 +73,12 @@ class SysidRunner(Node):
         self.pub_marker = self.create_publisher(String, '/sysid/marker', 10)
         self.pub_status = self.create_publisher(String, '/sysid/status', 10)
         self.create_service(SetBool, '~/arm', self.on_arm)
+        # Topic-triggered start (2026-07-07): 'ros2 service call' was hitting
+        # transient rcl/CLI discovery errors mid-water-session; topic pub/echo
+        # stayed reliable all session, so sysid_run.sh now fires this topic to
+        # start a run instead. '~/arm' is UNCHANGED and still works (manual
+        # start/abort from another shell, e.g. mid-run abort).
+        self.create_subscription(Empty, '~/go', self.on_go, 10)
         self.create_timer(1.0 / self.rate_hz, self.on_tick)
         self.create_timer(0.5, self.on_status)
         self.get_logger().info(
@@ -120,21 +134,85 @@ class SysidRunner(Node):
                         'label': 'auto-zero-tail'})
         return out
 
-    def on_arm(self, req, resp):
-        if req.data and self.finished is None and not self.armed:
+    def _start_run(self):
+        if self.finished is None and not self.armed:
             self.armed = True
             self.t0 = self.get_clock().now()
             self._cur_step = -1
             self._mark('RUN-START %s' % self.seq.get('name', ''))
-        elif not req.data and self.armed:
-            self.armed = False
-            if self.finished is None:
-                self.finished = 'aborted'
-                self._mark('RUN-ABORTED')
-        resp.success = True
+            return True
+        return False
+
+    def _begin_countdown(self):
+        """Start the in-node arming countdown (idempotent).  When it reaches
+        zero the node self-arms -- no external command is needed, so loss of
+        WiFi/SSH after this point is harmless."""
+        if self.finished is not None or self.armed:
+            return False
+        if self._countdown_left is not None:
+            return False   # already counting
+        self._countdown_left = max(1, int(round(self.countdown_s)))
+        self._mark('COUNTDOWN-START %ds (autonomous; no further commands needed)'
+                   % self._countdown_left)
+        self.get_logger().warn(
+            '>>> AUTONOMOUS ARM COUNTDOWN: %d s. Place sub + STAND CLEAR. '
+            'WiFi/SSH loss from here is safe. <<<' % self._countdown_left)
+        self._countdown_timer = self.create_timer(1.0, self._on_countdown_tick)
+        return True
+
+    def _on_countdown_tick(self):
+        if self.finished is not None:      # aborted during the countdown
+            self._cancel_countdown()
+            return
+        self._countdown_left -= 1
+        if self._countdown_left > 0:
+            if self._countdown_left <= 10 or self._countdown_left % 10 == 0:
+                self.get_logger().info('arming in %d s...' % self._countdown_left)
+            self._mark('COUNTDOWN %ds' % self._countdown_left)
+            return
+        self._cancel_countdown()
+        self.get_logger().warn('>>> COUNTDOWN COMPLETE -- ARMING NOW <<<')
+        self._start_run()
+
+    def _cancel_countdown(self):
+        if self._countdown_timer is not None:
+            self._countdown_timer.cancel()
+            self.destroy_timer(self._countdown_timer)
+            self._countdown_timer = None
+        self._countdown_left = None
+
+    def on_go(self, _msg):
+        if self.countdown_s > 0.0:
+            ok = self._begin_countdown()
+            self.get_logger().info(
+                'go-topic -> %s' % ('countdown started' if ok else
+                                    'ignored (armed/finished/counting)'))
+        else:
+            started = self._start_run()
+            self.get_logger().info(
+                'go-topic -> %s' % ('started' if started else
+                                    'REJECTED (already armed/finished)'))
+
+    def on_arm(self, req, resp):
+        # success must reflect whether the request was actually applied --
+        # the wrapper script only checks this field to decide whether arming
+        # took, so a rubber-stamped True here hides a no-op arm for 5 minutes.
+        if req.data:
+            resp.success = self._start_run()
+        else:
+            counting = self._countdown_left is not None
+            if counting:
+                self._cancel_countdown()
+            if self.armed or counting:
+                self.armed = False
+                if self.finished is None:
+                    self.finished = 'aborted'
+                    self._mark('RUN-ABORTED' + (' (countdown cancelled)' if counting else ''))
+            resp.success = True
         resp.message = ('armed' if self.armed else
                         'disarmed (%s)' % (self.finished or 'idle'))
-        self.get_logger().info('arm(%s) -> %s' % (req.data, resp.message))
+        self.get_logger().info('arm(%s) -> %s (success=%s)'
+                               % (req.data, resp.message, resp.success))
         return resp
 
     def _mark(self, text):

@@ -1,0 +1,49 @@
+[run] HW-FAITHFUL sensing (ESP32 depth-chain emulation + zeroed lateral velocity)
+[run] epsilon-plant actuation: 1
+[run] mode=full hw_faithful=1 started (attempt 1) — watch http://epsilon:8765
+t=   0.01s  StabilizeTask|STABILIZING (2.9/3.0s)
+t=   1.96s  GateTask|GateTask[1]:DiveToDepth(1.6m)
+t=   3.27s  GateTask|GateTask[2]:AcquireTarget(gate 0s)
+t=   3.34s  GateTask|GateTask[4]:Stabilize
+t=   5.07s  GateTask|GateTask[5]:CenterOnGateHalf(right ok:0)
+---
+task sequence: StabilizeTask -> GateTask
+RESULT: wall-clock timeout
+./run_course.sh: line 97: 11003 Killed                  ros2 run robosub sim_gui_node $SIM_ARGS > /tmp/run_sim.log 2>&1
+./run_course.sh: line 97: 11004 Killed                  PYTHONUNBUFFERED=1 ros2 run robosub submarine_node > /tmp/run_sub.log 2>&1
+=== submarine log tail ===
+INFO: control params loaded from /home/robosub/robosub_ws/build/robosub/config/pid_params.yaml
+INFO: task StabilizeTask completed
+INFO: course reference locked at 358.8 deg
+INFO: DiveToDepth -> 1.55 m
+WARN: CenterOnGateHalf TIMEOUT after 40s — completing (safety valve)
+WARN: CenterOnGateHalf TIMEOUT after 40s — completing (safety valve)
+INFO: StyleRoll 360 deg at 1.55 m, axis 358.8 (pump mode)
+WARN: StyleRollSubtask TIMEOUT after 45s — completing (safety valve)
+WARN: CenterOnGateHalf TIMEOUT after 40s — completing (safety valve)
+INFO: StyleRoll 360 deg at 1.55 m, axis 358.8 (pump mode)
+WARN: StyleRollSubtask TIMEOUT after 45s — completing (safety valve)
+WARN: CenterOnGateHalf TIMEOUT after 40s — completing (safety valve)
+WARN: DriveThroughGate TIMEOUT after 45s — completing (safety valve)
+INFO: task GateTask completed
+=== judge ===
+=== RUN: 0.0s .. 610.4s (35642 samples) ===
+
+--- STATE TIMELINE (dur > 0.5s; * = >60s HANG-SUSPECT) ---
+    0.0s +   7.4s  WAITING                  Press Start to begin
+    7.4s +   4.8s  StabilizeTask            STABILIZING (#/#s)
+   12.3s +   1.3s  GateTask                 GateTask[#]:DiveToDepth(#m)
+   13.7s +   1.7s  GateTask                 GateTask[#]:Stabilize
+   15.4s + 595.0s  GateTask                 GateTask[#]:CenterOnGateHalf(right ok:#) *
+
+--- GATE (x=10.0, center_y=7.5, half-centers y=6.75/8.25, opening z>0.2) ---
+
+--- SLALOM GATELETS ---
+
+--- DEPTH BY TASK (target 1.5, gate legs 1.55) ---
+WAITING                  z mean 0.01  min 0.00  max 0.10
+StabilizeTask            z mean 0.97  min 0.01  max 1.58
+GateTask                 z mean 0.05  min 0.00  max 1.69
+
+--- END: t=610.4s task=GateTask state=GateTask[5]:CenterOnGateHalf(right ok:0)
+    pose x=1.23 y=5.32 z=0.00 hdg=326.2 roll=-0.4

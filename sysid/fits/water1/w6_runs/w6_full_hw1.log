@@ -1,0 +1,264 @@
+[run] HW-FAITHFUL sensing (ESP32 depth-chain emulation + zeroed lateral velocity)
+[run] epsilon-plant actuation: 1
+[run] mode=full hw_faithful=1 started (attempt 1) — watch http://epsilon:8765
+t=   0.01s  StabilizeTask|STABILIZING (2.6/3.0s)
+t=   2.17s  GateTask|GateTask[1]:DiveToDepth(1.6m)
+t=   2.77s  GateTask|GateTask[2]:AcquireTarget(gate 0s)
+t=   2.84s  GateTask|GateTask[4]:Stabilize
+t=   5.39s  GateTask|GateTask[5]:CenterOnGateHalf(right ok:0)
+t=  32.19s  GateTask|GateTask[6]:Stabilize
+t=  33.68s  GateTask|GateTask[7]:CenterOnGateHalf(right ok:1)
+t=  73.67s  GateTask|GateTask[8]:StyleRollSubtask(+0/360 pump) T!1
+t=  75.31s  GateTask|GateTask[8]:StyleRollSubtask(+30/360 carry) T!1
+t=  76.52s  GateTask|GateTask[8]:StyleRollSubtask(-67/360 pump) T!1
+t=  76.77s  GateTask|GateTask[8]:StyleRollSubtask(-46/360 carry) T!1
+t=  78.06s  GateTask|GateTask[8]:StyleRollSubtask(+68/360 pump) T!1
+t=  78.32s  GateTask|GateTask[8]:StyleRollSubtask(+45/360 carry) T!1
+t=  79.59s  GateTask|GateTask[8]:StyleRollSubtask(-68/360 pump) T!1
+t=  79.86s  GateTask|GateTask[8]:StyleRollSubtask(-46/360 carry) T!1
+t=  81.14s  GateTask|GateTask[8]:StyleRollSubtask(+68/360 pump) T!1
+t=  81.39s  GateTask|GateTask[8]:StyleRollSubtask(+47/360 carry) T!1
+t=  82.67s  GateTask|GateTask[8]:StyleRollSubtask(-67/360 pump) T!1
+t=  82.92s  GateTask|GateTask[8]:StyleRollSubtask(-46/360 carry) T!1
+t=  84.21s  GateTask|GateTask[8]:StyleRollSubtask(+70/360 pump) T!1
+t=  84.47s  GateTask|GateTask[8]:StyleRollSubtask(+51/360 carry) T!1
+t=  85.81s  GateTask|GateTask[8]:StyleRollSubtask(-65/360 pump) T!1
+t=  86.07s  GateTask|GateTask[8]:StyleRollSubtask(-42/360 carry) T!1
+t=  87.34s  GateTask|GateTask[8]:StyleRollSubtask(+69/360 pump) T!1
+t=  87.61s  GateTask|GateTask[8]:StyleRollSubtask(+54/360 carry) T!1
+t=  88.89s  GateTask|GateTask[8]:StyleRollSubtask(-61/360 pump) T!1
+t=  89.14s  GateTask|GateTask[8]:StyleRollSubtask(-40/360 carry) T!1
+t=  90.47s  GateTask|GateTask[8]:StyleRollSubtask(+76/360 pump) T!1
+t=  90.73s  GateTask|GateTask[8]:StyleRollSubtask(+55/360 carry) T!1
+t=  92.01s  GateTask|GateTask[8]:StyleRollSubtask(-59/360 pump) T!1
+t=  92.27s  GateTask|GateTask[8]:StyleRollSubtask(-38/360 carry) T!1
+t=  93.56s  GateTask|GateTask[8]:StyleRollSubtask(+77/360 pump) T!1
+t=  93.81s  GateTask|GateTask[8]:StyleRollSubtask(+57/360 carry) T!1
+t=  95.07s  GateTask|GateTask[8]:StyleRollSubtask(-59/360 pump) T!1
+t=  95.34s  GateTask|GateTask[8]:StyleRollSubtask(-40/360 carry) T!1
+t=  96.69s  GateTask|GateTask[8]:StyleRollSubtask(+77/360 pump) T!1
+t=  96.94s  GateTask|GateTask[8]:StyleRollSubtask(+54/360 carry) T!1
+t=  98.22s  GateTask|GateTask[8]:StyleRollSubtask(-59/360 pump) T!1
+t=  98.47s  GateTask|GateTask[8]:StyleRollSubtask(-38/360 carry) T!1
+t=  99.74s  GateTask|GateTask[8]:StyleRollSubtask(+78/360 pump) T!1
+t= 100.01s  GateTask|GateTask[8]:StyleRollSubtask(+58/360 carry) T!1
+t= 101.34s  GateTask|GateTask[8]:StyleRollSubtask(-58/360 pump) T!1
+t= 101.59s  GateTask|GateTask[8]:StyleRollSubtask(-37/360 carry) T!1
+t= 102.87s  GateTask|GateTask[8]:StyleRollSubtask(+77/360 pump) T!1
+t= 103.12s  GateTask|GateTask[8]:StyleRollSubtask(+58/360 carry) T!1
+t= 104.41s  GateTask|GateTask[8]:StyleRollSubtask(-59/360 pump) T!1
+t= 104.66s  GateTask|GateTask[8]:StyleRollSubtask(-40/360 carry) T!1
+t= 105.94s  GateTask|GateTask[8]:StyleRollSubtask(+77/360 pump) T!1
+t= 106.19s  GateTask|GateTask[8]:StyleRollSubtask(+59/360 carry) T!1
+t= 107.54s  GateTask|GateTask[8]:StyleRollSubtask(-58/360 pump) T!1
+t= 107.81s  GateTask|GateTask[8]:StyleRollSubtask(-35/360 carry) T!1
+t= 109.07s  GateTask|GateTask[8]:StyleRollSubtask(+77/360 pump) T!1
+t= 109.34s  GateTask|GateTask[8]:StyleRollSubtask(+55/360 carry) T!1
+t= 110.61s  GateTask|GateTask[8]:StyleRollSubtask(-50/360 pump) T!1
+t= 110.86s  GateTask|GateTask[8]:StyleRollSubtask(-33/360 carry) T!1
+t= 112.21s  GateTask|GateTask[8]:StyleRollSubtask(+85/360 pump) T!1
+t= 112.49s  GateTask|GateTask[8]:StyleRollSubtask(+60/360 carry) T!1
+t= 113.76s  GateTask|GateTask[8]:StyleRollSubtask(-50/360 pump) T!1
+t= 114.01s  GateTask|GateTask[8]:StyleRollSubtask(-29/360 carry) T!1
+t= 115.29s  GateTask|GateTask[8]:StyleRollSubtask(+86/360 pump) T!1
+t= 115.57s  GateTask|GateTask[8]:StyleRollSubtask(+59/360 carry) T!1
+t= 116.82s  GateTask|GateTask[8]:StyleRollSubtask(-45/360 pump) T!1
+t= 117.07s  GateTask|GateTask[8]:StyleRollSubtask(-24/360 carry) T!1
+t= 118.36s  GateTask|GateTask[8]:StyleRollSubtask(+90/360 pump) T!1
+t= 118.66s  GateTask|GateTask[9]:Stabilize T!2
+t= 120.21s  GateTask|GateTask[10]:TurnToHeading(1 deg) T!2
+t= 120.27s  GateTask|GateTask[11]:CenterOnGateHalf(right ok:0) T!2
+t= 160.26s  GateTask|GateTask[12]:StyleRollSubtask(+0/360 pump) T!3
+t= 161.87s  GateTask|GateTask[12]:StyleRollSubtask(+36/360 carry) T!3
+t= 163.09s  GateTask|GateTask[12]:StyleRollSubtask(-67/360 pump) T!3
+t= 163.36s  GateTask|GateTask[12]:StyleRollSubtask(-48/360 carry) T!3
+t= 164.69s  GateTask|GateTask[12]:StyleRollSubtask(+68/360 pump) T!3
+t= 164.96s  GateTask|GateTask[12]:StyleRollSubtask(+45/360 carry) T!3
+t= 166.24s  GateTask|GateTask[12]:StyleRollSubtask(-64/360 pump) T!3
+t= 166.51s  GateTask|GateTask[12]:StyleRollSubtask(-42/360 carry) T!3
+t= 167.77s  GateTask|GateTask[12]:StyleRollSubtask(+72/360 pump) T!3
+t= 168.04s  GateTask|GateTask[12]:StyleRollSubtask(+51/360 carry) T!3
+t= 169.32s  GateTask|GateTask[12]:StyleRollSubtask(-64/360 pump) T!3
+t= 169.57s  GateTask|GateTask[12]:StyleRollSubtask(-44/360 carry) T!3
+t= 170.86s  GateTask|GateTask[12]:StyleRollSubtask(+72/360 pump) T!3
+t= 171.11s  GateTask|GateTask[12]:StyleRollSubtask(+53/360 carry) T!3
+t= 172.39s  GateTask|GateTask[12]:StyleRollSubtask(-54/360 pump) T!3
+t= 172.64s  GateTask|GateTask[12]:StyleRollSubtask(-34/360 carry) T!3
+t= 173.99s  GateTask|GateTask[12]:StyleRollSubtask(+77/360 pump) T!3
+t= 174.24s  GateTask|GateTask[12]:StyleRollSubtask(+55/360 carry) T!3
+t= 175.52s  GateTask|GateTask[12]:StyleRollSubtask(-58/360 pump) T!3
+t= 175.77s  GateTask|GateTask[12]:StyleRollSubtask(-37/360 carry) T!3
+t= 177.06s  GateTask|GateTask[12]:StyleRollSubtask(+78/360 pump) T!3
+t= 177.31s  GateTask|GateTask[12]:StyleRollSubtask(+59/360 carry) T!3
+t= 178.66s  GateTask|GateTask[12]:StyleRollSubtask(-52/360 pump) T!3
+t= 178.91s  GateTask|GateTask[12]:StyleRollSubtask(-30/360 carry) T!3
+t= 180.19s  GateTask|GateTask[12]:StyleRollSubtask(+83/360 pump) T!3
+t= 180.47s  GateTask|GateTask[12]:StyleRollSubtask(+58/360 carry) T!3
+t= 181.72s  GateTask|GateTask[12]:StyleRollSubtask(-53/360 pump) T!3
+t= 181.97s  GateTask|GateTask[12]:StyleRollSubtask(-34/360 carry) T!3
+t= 183.32s  GateTask|GateTask[12]:StyleRollSubtask(+83/360 pump) T!3
+t= 183.59s  GateTask|GateTask[12]:StyleRollSubtask(+59/360 carry) T!3
+t= 184.86s  GateTask|GateTask[12]:StyleRollSubtask(-53/360 pump) T!3
+t= 185.11s  GateTask|GateTask[12]:StyleRollSubtask(-33/360 carry) T!3
+t= 186.39s  GateTask|GateTask[12]:StyleRollSubtask(+83/360 pump) T!3
+t= 186.67s  GateTask|GateTask[12]:StyleRollSubtask(+59/360 carry) T!3
+t= 187.92s  GateTask|GateTask[12]:StyleRollSubtask(-53/360 pump) T!3
+t= 188.17s  GateTask|GateTask[12]:StyleRollSubtask(-34/360 carry) T!3
+t= 189.52s  GateTask|GateTask[12]:StyleRollSubtask(+83/360 pump) T!3
+t= 189.81s  GateTask|GateTask[12]:StyleRollSubtask(+59/360 carry) T!3
+t= 191.12s  GateTask|GateTask[12]:StyleRollSubtask(-52/360 pump) T!3
+t= 191.37s  GateTask|GateTask[12]:StyleRollSubtask(-31/360 carry) T!3
+t= 192.64s  GateTask|GateTask[12]:StyleRollSubtask(+84/360 pump) T!3
+t= 192.92s  GateTask|GateTask[12]:StyleRollSubtask(+59/360 carry) T!3
+t= 194.19s  GateTask|GateTask[12]:StyleRollSubtask(-53/360 pump) T!3
+t= 194.51s  GateTask|GateTask[12]:StyleRollSubtask(-26/360 carry) T!3
+t= 195.79s  GateTask|GateTask[12]:StyleRollSubtask(+75/360 pump) T!3
+t= 196.04s  GateTask|GateTask[12]:StyleRollSubtask(+54/360 carry) T!3
+t= 197.37s  GateTask|GateTask[12]:StyleRollSubtask(-57/360 pump) T!3
+t= 197.64s  GateTask|GateTask[12]:StyleRollSubtask(-35/360 carry) T!3
+t= 198.91s  GateTask|GateTask[12]:StyleRollSubtask(+78/360 pump) T!3
+t= 199.19s  GateTask|GateTask[12]:StyleRollSubtask(+59/360 carry) T!3
+t= 200.51s  GateTask|GateTask[12]:StyleRollSubtask(-54/360 pump) T!3
+t= 200.76s  GateTask|GateTask[12]:StyleRollSubtask(-39/360 carry) T!3
+t= 202.04s  GateTask|GateTask[12]:StyleRollSubtask(+75/360 pump) T!3
+t= 202.29s  GateTask|GateTask[12]:StyleRollSubtask(+57/360 carry) T!3
+t= 203.57s  GateTask|GateTask[12]:StyleRollSubtask(-61/360 pump) T!3
+t= 203.84s  GateTask|GateTask[12]:StyleRollSubtask(-41/360 carry) T!3
+t= 205.17s  GateTask|GateTask[12]:StyleRollSubtask(+74/360 pump) T!3
+t= 205.24s  GateTask|GateTask[13]:Stabilize T!4
+t= 206.91s  GateTask|GateTask[15]:CenterOnGateHalf(right ok:0) T!4
+t= 246.89s  GateTask|GateTask[16]:Stabilize T!5
+t= 248.37s  GateTask|GateTask[17]:DriveThroughGate(right entry) T!5
+t= 252.37s  GateTask|GateTask[17]:DriveThroughGate(right clear) T!5
+t= 256.37s  StabilizeTask|STABILIZING (0.0/3.0s)
+t= 259.36s  SweepForSlalomTask|SWEEPING (seen 0/8)
+t= 299.36s  SlalomTask|DIVE pass=0 side=?
+t= 300.92s  SlalomTask|SEARCH pass=0 side=?
+t= 309.94s  SlalomTask|FINISH pass=0 side=?
+t= 309.96s  MISSION_FAILED|
+---
+task sequence: StabilizeTask -> GateTask -> StabilizeTask -> SweepForSlalomTask -> SlalomTask -> MISSION_FAILED
+RESULT: MISSION_FAILED
+./run_course.sh: line 97:  3440 Killed                  ros2 run robosub sim_gui_node $SIM_ARGS > /tmp/run_sim.log 2>&1
+./run_course.sh: line 97:  3441 Killed                  PYTHONUNBUFFERED=1 ros2 run robosub submarine_node > /tmp/run_sub.log 2>&1
+=== submarine log tail ===
+INFO: StyleRoll carry stalled at +75 deg — back to pump
+INFO: StyleRoll pump -> carry at +57 deg, -2.5 rad/s
+INFO: StyleRoll carry stalled at -61 deg — back to pump
+INFO: StyleRoll pump -> carry at -41 deg, +2.5 rad/s
+INFO: StyleRoll carry stalled at +74 deg — back to pump
+WARN: StyleRollSubtask TIMEOUT after 45s — completing (safety valve)
+WARN: CenterOnGateHalf TIMEOUT after 40s — completing (safety valve)
+WARN: DriveThroughGate never saw the gate — clearing blind
+INFO: task GateTask completed
+INFO: task StabilizeTask completed
+WARN: Sweep TIMEOUT without a gatelet — completing (valve)
+INFO: task SweepForSlalomTask completed
+INFO: Slalom start rev=False axis=1 side=None
+ERROR: Slalom finished with ZERO passes
+ERROR: task SlalomTask FAILED — mission over
+=== judge ===
+=== RUN: 0.0s .. 320.1s (18685 samples) ===
+
+--- STATE TIMELINE (dur > 0.5s; * = >60s HANG-SUSPECT) ---
+    0.0s +   7.5s  WAITING                  Press Start to begin
+    7.5s +   4.7s  StabilizeTask            STABILIZING (#/#s)
+   12.3s +   0.5s  GateTask                 GateTask[#]:DiveToDepth(#m)
+   12.9s +   2.5s  GateTask                 GateTask[#]:Stabilize
+   15.5s +  26.8s  GateTask                 GateTask[#]:CenterOnGateHalf(right ok:#)
+   42.3s +   1.5s  GateTask                 GateTask[#]:Stabilize
+   43.8s +  40.0s  GateTask                 GateTask[#]:CenterOnGateHalf(right ok:#)
+   83.8s +   1.6s  GateTask                 GateTask[#]:StyleRollSubtask(#/# pump) T!
+   85.4s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+   86.9s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+   88.5s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+   90.0s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+   91.5s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+   93.0s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+   94.6s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+   96.2s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+   97.7s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+   99.3s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  100.8s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  102.4s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  103.9s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  105.4s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  107.1s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  108.6s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  110.1s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  111.7s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  113.2s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  114.8s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  116.3s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  117.9s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  119.5s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  121.0s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  122.6s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  124.1s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  125.7s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  127.2s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  128.8s +   1.5s  GateTask                 GateTask[#]:Stabilize T!
+  130.4s +  40.0s  GateTask                 GateTask[#]:CenterOnGateHalf(right ok:#) T!
+  170.4s +   1.6s  GateTask                 GateTask[#]:StyleRollSubtask(#/# pump) T!
+  172.0s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  173.4s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  175.1s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  176.6s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  178.2s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  179.7s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  181.2s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  182.7s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  184.4s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  185.9s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  187.4s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  189.0s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  190.6s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  192.1s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  193.7s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  195.2s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  196.8s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  198.3s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  199.9s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  201.5s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  203.1s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  204.6s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  206.1s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  207.7s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  209.3s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  210.8s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  212.4s +   1.2s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  213.9s +   1.3s  GateTask                 GateTask[#]:StyleRollSubtask(#/# carry) T!
+  215.4s +   1.6s  GateTask                 GateTask[#]:Stabilize T!
+  217.0s +  40.0s  GateTask                 GateTask[#]:CenterOnGateHalf(right ok:#) T!
+  257.0s +   1.5s  GateTask                 GateTask[#]:Stabilize T!
+  258.5s +   4.0s  GateTask                 GateTask[#]:DriveThroughGate(right entry) T!
+  262.5s +   4.0s  GateTask                 GateTask[#]:DriveThroughGate(right clear) T!
+  266.5s +   2.9s  StabilizeTask            STABILIZING (#/#s)
+  269.5s +  40.0s  SweepForSlalomTask       SWEEPING (seen #/#)
+  309.5s +   1.5s  SlalomTask               DIVE pass=# side=?
+  311.0s +   9.0s  SlalomTask               SEARCH pass=# side=?
+
+--- GATE (x=10.0, center_y=7.5, half-centers y=6.75/8.25, opening z>0.2) ---
+  120.4s OUT  y=8.65 (off-center +1.15 m; left(y>c), off-half-center +0.40 m)  z=1.56 during GateTask
+
+--- STYLE ROLL ---
+span    83.8s..  215.4s (131.6s)  net roll +42 deg (peak excursion 73)
+pre-roll pose x=5.87 y=6.65 z=1.55 hdg=0.4
+max drift during roll: dx=10.58 dy=3.57 dz=0.03 m, max heading dev 4.9 deg
+at roll end: dx=+10.58 dy=+3.52 dz=-0.01 hdg dev +0.7 roll=+46.1
+at drive-through start (t=258.5): dx=+4.32 dy=+3.25 dz=+0.02 hdg dev +0.8
+
+--- SLALOM GATELETS ---
+  263.5s OUT  x= 18.0 y=10.31 left(y>red) THROUGH-GAP off-gap-mid -0.27 m, nearest pole 0.50 m (GateTask)
+  265.2s OUT  x= 22.0 y=10.47 left(y>red) THROUGH-GAP off-gap-mid -0.20 m, nearest pole 0.56 m (GateTask)
+  267.0s OUT  x= 26.0 y=10.63 left(y>red) THROUGH-GAP off-gap-mid -0.13 m, nearest pole 0.63 m (StabilizeTask)
+
+--- DEPTH BY TASK (target 1.5, gate legs 1.55) ---
+WAITING                  z mean 0.01  min 0.00  max 0.10
+StabilizeTask            z mean 1.17  min 0.01  max 1.57
+GateTask                 z mean 1.56  min 1.49  max 1.70
+SweepForSlalomTask       z mean 1.50  min 1.49  max 1.52
+SlalomTask               z mean 1.49  min 1.47  max 1.51
+
+--- END: t=320.1s task=SlalomTask state=FINISH pass=0 side=?
+    pose x=39.50 y=12.23 z=1.50 hdg=1.2 roll=-0.1

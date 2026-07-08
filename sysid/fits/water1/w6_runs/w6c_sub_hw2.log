@@ -1,0 +1,21 @@
+INFO: control params loaded from /home/robosub/robosub_ws/build/robosub/config/pid_params.yaml
+[config] calibration applied from /home/robosub/robosub_ws/sysid/sim_calibration.yaml: ['cameraFov', 'subMass', 'subVolume', 'buoyancyDepthSlope', 'subInertia_Z', 'subInertia_Y', 'subInertia_X', 'thrusterMaxForce', 'yawMomentArm', 'rollMomentArm', 'heaveDragCoeff', 'angularDragCoeff_Z', 'angularDragCoeff_X', 'angularDragCoeff_Y', 'rollRightingMoment', 'pitchRightingMoment']
+[config] epsilonPlant=True (env)
+INFO: task StabilizeTask completed
+INFO: course reference locked at 358.0 deg
+INFO: DiveToDepth -> 1.55 m
+WARN: Stabilize TIMEOUT after 21s — completing (safety valve)
+WARN: CenterOnGateHalf TIMEOUT after 40s — completing (safety valve)
+WARN: Stabilize TIMEOUT after 22s — completing (safety valve)
+WARN: CenterOnGateHalf TIMEOUT after 40s — completing (safety valve)
+INFO: StyleRoll 360 deg at 1.55 m, axis 358.0 (pump mode)
+WARN: StyleRollSubtask TIMEOUT after 45s — completing (safety valve)
+WARN: Stabilize TIMEOUT after 22s — completing (safety valve)
+WARN: CenterOnGateHalf TIMEOUT after 40s — completing (safety valve)
+INFO: StyleRoll 360 deg at 1.55 m, axis 358.0 (pump mode)
+WARN: StyleRollSubtask TIMEOUT after 45s — completing (safety valve)
+WARN: Stabilize TIMEOUT after 22s — completing (safety valve)
+WARN: CenterOnGateHalf TIMEOUT after 40s — completing (safety valve)
+WARN: Stabilize TIMEOUT after 22s — completing (safety valve)
+WARN: DriveThroughGate TIMEOUT after 45s — completing (safety valve)
+INFO: task GateTask completed

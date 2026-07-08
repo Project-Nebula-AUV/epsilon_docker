@@ -1,0 +1,25 @@
+[run] HW-FAITHFUL sensing (ESP32 depth-chain emulation + zeroed lateral velocity)
+[run] epsilon-plant actuation: 1
+[run] mode=full hw_faithful=1 started (attempt 30) — watch http://epsilon:8765
+---
+task sequence: 
+RESULT: wall-clock timeout
+./run_course.sh: line 97:  6936 Killed                  ros2 run robosub sim_gui_node $SIM_ARGS > /tmp/run_sim.log 2>&1
+./run_course.sh: line 97:  6937 Killed                  PYTHONUNBUFFERED=1 ros2 run robosub submarine_node > /tmp/run_sub.log 2>&1
+=== submarine log tail ===
+INFO: control params loaded from /home/robosub/robosub_ws/build/robosub/config/pid_params.yaml
+=== judge ===
+=== RUN: 0.0s .. 708.5s (41332 samples) ===
+
+--- STATE TIMELINE (dur > 0.5s; * = >60s HANG-SUSPECT) ---
+    0.0s + 708.5s  WAITING                  Press Start to begin *
+
+--- GATE (x=10.0, center_y=7.5, half-centers y=6.75/8.25, opening z>0.2) ---
+
+--- SLALOM GATELETS ---
+
+--- DEPTH BY TASK (target 1.5, gate legs 1.55) ---
+WAITING                  z mean 0.00  min 0.00  max 0.10
+
+--- END: t=708.5s task=WAITING state=Press Start to begin
+    pose x=7.00 y=7.90 z=0.00 hdg=0.0 roll=0.0

@@ -1,5 +1,35 @@
 # SYSID RESUME — canonical state. Update BEFORE ending every session.
 
+2026-07-07 PM — **W6 SESSION (Session D): epsilon-plant + depth re-tune +
+roll pump + vision/centering overhaul + camera match — ALL DEPLOYED
+(backups `.pre-20260707-w6`), see "## W6 session" below.** F13 DECIDED by
+user: pool-floor failures ACCEPTED + retrieval plan (revisit before comp).
+UPDATE 2026-07-08 AM (W7, this morning): BOTH open items FIXED+VERIFIED —
+(1) return-gate acquisition: _is_slalom_red bands tightened to true gatelet
+geometry (ratio 0.7-1.45, sep 0.8-2.4x mean h, bottoms 0.35 — the old loose
+bands excluded EVERY red on the return leg; backup .pre-slalomred.20260708;
+re-probe: posts survive, pair=Y) → STYLE_ROLL=0 full course **CLEAN
+COMPLETION 145.2 s, zero valves**. (2) W7 pacing: Center valve 40→20 s +
+ADAPTIVE roll segments (a segment that times out short sets
+context['style_roll_skip']; later segments complete instantly; backup
+.pre-w7pace.20260708) → full course WITH roll **MISSION_COMPLETE 194.4 s**
+(valves remaining: 1 honest pump timeout + 2 post-roll re-centers while
+still swinging; pump best swing +101°). REPEATABILITY CONFIRMED 2026-07-08 PM:
+with-roll full course 4/4 COMPLETE — 194.4/204.5/186.8 s HW-faithful +
+236.7 s ideal (valves = honest pump timeouts + post-roll re-centers only);
+no-roll CLEAN 145.2 s. Logs archived: sysid/fits/water1/w6_runs/.
+s2b_depth_release DRY PASS (3368 ticks, dev 0.000) — its logger run ALSO
+verified temp.csv end-to-end (449 rows ~7 Hz, F14 check done);
+s9b_roll_pump DRY PASS (3067 ticks, dev 0.000). NOTE: sysid_run.sh must be
+invoked INSIDE the container (docker exec, cd /home/robosub/robosub_ws) —
+the host has no robosub_ws path (failed silently-ish from the host 2026-07-08).
+**WATER SESSION 2 IS FULLY UNBLOCKED — user checklist sysid/WATER2_ADDENDUM.md.**
+[superseded 2026-07-07 text follows:] FULL COURSE NOT YET CLEAN — two open items: (1) return-gate AcquireTarget
+fails looking back through the slalom field (probe staged:
+sysid/fits/water1/return_probe.py), (2) style-roll safety valves (~300 s)
+overrun the 600 s wall clock → W7 re-pacing. Verification logs archived in
+sysid/fits/water1/w6_runs/. Water-2 user checklist: sysid/WATER2_ADDENDUM.md.
+
 STATUS: SESSION A COMPLETE (2026-07-05). W0 audited+hardened, W1 built+DRY-verified
 (all 7 sequences PASS), PROTOCOL.md v1 live, fit-side starter scripts in sysid/fit/.
 2026-07-06: **DEPTH SENSOR WORKS — new ESP32 architecture, integrated + verified**
@@ -8,11 +38,23 @@ STATUS: SESSION A COMPLETE (2026-07-05). W0 audited+hardened, W1 built+DRY-verif
 calibration mechanism, passive pitch DOF, measured sensor models, esp32 depth
 emulation, pool|comp venues — full course clean under all of it; style roll now
 honestly stalls (S2/S9 + W6 will resolve).
-NEXT: **user executes PART A of PROTOCOL.md (bench: A1 hand-signs, A2 measurements
-incl. REAL GATE BAR DEPTH in the pool, A3 camera FOV; A4 done 2026-07-05) and
-secures the MS5837↔Xiao wiring**, then water session 1 (S1,S2,S3,S4,S7).
-Model then runs Session B fits (axis map → S3/S4/S7 fits → calibration values
-replace nominals → epsilon-plant mode → W6 re-tune + style-roll strategy).
+2026-07-07: **WATER SESSION 1 COMPLETE + FITS LANDED** (see "Water session 1
+fits" below + sysid/fits/water1/water1_fit_report.md): S1/S2 hand, S3/S4/S7
+live all logged; S3+S7 touched bottom (pool small — handled in fits), S4
+finger-steadied near surface (clean anyway). First real dynamics now live in
+sim_calibration.yaml (16 params overlay-verified); simulator grew
+rollMomentArm + buoyancyDepthSlope (backups .pre-water1cal.20260707-030925).
+THREE NEW FINDINGS: **F13 fail-safe-to-surface FAILS below ~1.5-2 m
+(compressible buoyancy — SAFETY, decide foam/purge before comp)**, F14 ESP32
+depth ~0.2 m temp transient on air↔water (launch with sub already floating),
+F15 pool actually ~2.0-2.1+ m deep (1.52 venue value wrong; user confirmed
+deeper than 1.5, exact depth unmeasured). 4b CLOSED (in-water chain excellent).
+NEXT (model): W6 = style-roll RESONANCE PUMP (~0.45-0.5 Hz; direct 90° not
+reachable at safe power — numbers in the fit report) + epsilon-plant mode
+(quadratic thrust curves T=0.0015·cmd² — the linear-sim band-match at 30-40%
+is the biggest remaining sim lie) + nav re-tune under the calibrated sim.
+NEXT (user): water session 2 (S5,S6,S8,S9,S10 + S2b at-depth releases +
+measure pool depth); see "Water session 2 additions" in the fit report.
 
 ## Depth architecture (2026-07-06 — the Pi 5 was the problem all along)
 The MS5837 never worked on the Pi 5's I2C buses (0 valid reads across ~16k attempts,
@@ -219,6 +261,88 @@ this stream via the new `esp32_depth` driver (epsilon_sensors):
   sysid_logger.py, motortest.sh, sysid_run.sh, docker-compose.override.rpi.yml,
   epsilon_sensors setup.py — all `.pre-esp32.20260706-003515`.
 
+- F13 NEW (HIGH, SAFETY, 2026-07-07 water 1): **fail-safe-to-surface FAILS
+  below ~1.5-2 m.** Post-S3-auto-zero the sub sank 1.88→floor and stayed;
+  same in S7. Buoyancy falls ~0.53 N/m of depth (~0.5-0.7 L compressible
+  volume: trapped air in frame tubes / enclosure flex). At comp depths a
+  disarmed sub SINKS. Fix before comp: fixed foam, find+purge the air, or
+  accept + retrieval plan. Sim now models it (buoyancyDepthSlope).
+- F14 NEW (2026-07-07): ESP32 depth reads a ~0.2-0.25 m TEMPERATURE transient
+  on air↔water transitions, settling ~20-30 s (post-run in-air readings walk
+  −0.03→−0.24 m). Conversion/scale verified sane. Mitigation: launch the
+  stack with the sub already FLOATING (wet baseline at water temp — fits the
+  90 s ARM_DELAY workflow); consider logging firmware temperature in
+  depth_raw.csv.
+- F15 NEW (2026-07-07): pool floor at ~2.0-2.1 m SENSOR depth ⇒ pool deeper
+  than the 1.52 m venue assumption (user confirmed; meta water_depth values
+  in the water-1 runs were defaults, not measurements). Measure + update the
+  pool venue worldDepth.
+- 4b CLOSED (2026-07-07): ESP32 chain in-water EXCELLENT — 7.14 Hz steady,
+  max gap 0.15 s, zero >0.5 s gaps, raw-vs-fused p50 4-6 mm / p99 39-55 mm,
+  zero >10 cm outliers (S3+S7 live windows). Filter gates never stressed.
+- Backups 2026-07-07 (water-1 calibration): simulator.py, sub/config.py,
+  sim_calibration.yaml — all `.pre-water1cal.20260707-030925`. New sim
+  params: rollMomentArm (legacy default 0.23; calibrated 0.184),
+  buoyancyDepthSlope (default 0.0; calibrated 0.53).
+
+## W6 session (2026-07-07 PM) — epsilon-plant + re-tune + pump + vision
+All backups `.pre-20260707-w6`: sub/config.py, simulator/simulator.py,
+sub/data_structures.py, sub/tasks/common_subtasks.py, sub/tasks/gate_task.py,
+config/pid_params.yaml, run_course.sh, esp32_depth.py, sysid_logger.py.
+- **EPSILON-PLANT MODE (W5 remainder, DONE):** per-thruster force = MEASURED
+  quadratic T=0.0015·(cmd%)² up to 40% (edge of data), tangent line above
+  (conservative 9.6 N@100 vs unverified quadratic 15). Verified F(0.22) =
+  0.73 N/motor = the real −22% hover trim exactly. New config params:
+  epsilonPlant / thrustCurveQuadA / thrustCurveLinearizeAbove /
+  epsilonPlantYawArm (0.133 = S4 τ(40)/4F(40)); env ROBOSUB_EPSILON_PLANT
+  wins. run_course.sh: HW_FAITHFUL=1 defaults plant ON (EPSILON_PLANT=0 =
+  legacy linear). Roll keeps tape-measured arm 0.184 (S7 cross-check ✓).
+- **DEPTH RE-TUNE (M-series stall fix, DONE):** root cause buoyancy_ff 0.61
+  — ≈1 N under old 0.8 N thrusters but ~6.5 N down-thrust under the real
+  plant; integrator range ±0.144 couldn't cancel → parked 0.13 m low.
+  pid_params now: buoyancy_ff 0.12, depth_i 0.15, depth_i_clamp 2.0,
+  depth_p 3.0. Hold-verified: settle ±5 cm by 58 s, final err 3.5 mm at the
+  near-neutral 1.5 m. SIM-tuned — hardware hold check REQUIRED before any
+  water course (motortest hold 60 s).
+- **STYLE-ROLL RESONANCE PUMP (DONE, honest):** StyleRollSubtask bang-bang
+  pumps torque in phase with roll rate (self-locks at ωn), commits to
+  rotation at ≥2.4 rad/s near upright, un-commits + re-pumps on stall,
+  45 s timeout still COMPLETED. Offline + in-sim behavior: completes 720°
+  in ~11 s if high-rate roll drag ~linear; swings ±89° + safe timeout under
+  the (equally unverified) quadratic model. **S9b water 2 = the decider.**
+  roll_power 0.95→0.80 (F12 margin).
+- **VISION/CENTERING OVERHAUL (DONE — first verification batch exposed 4
+  latent comp-relevant bugs):** (a) min-area thresholds scale by image area
+  (ref 320×240; hw 640×320 = 2.67×); (b) gate pairing = ALL candidate pairs
+  + separation gate 0.8–3.0× mean height (real gate w/h = 2.0) — without it
+  in-line slalom reds paired as a phantom gate → 15 m overshoot; (c) blind
+  centering fallback steers by get_gate_post_blobs() only — it was chasing
+  the 2026 RED MAKER BOX; (d) Center completion tolerances re-derived for
+  the MEASURED compass noise (1.32°): 10 px / rate 0.10 / 8 ticks (pre-roll
+  0.06×12; old 6 px/0.04×12 & 0.02×24 were unattainable — every Center
+  burned its full 40 s valve, all modes); (e) range-hold surge caps ±0.15/0.2
+  sat inside the plant deadband (sub couldn't back up) → ±0.35/0.25 gain
+  0.6; (f) sim renders the 2026 gate honestly: RED divider + BLACK/RED
+  maker boxes; (g) **sim camera 320×240 → 320×160 (USER REQUEST)** = hw 2:1
+  aspect, VFOV 41.3° (old 4:3 saw 18° more vertically). In-process
+  closed-loop probes: sysid/fits/water1/center_probe.py + center_probe2.py
+  (PASS 4–13 s). Gate mode: 280 s valve-burning → **166 s complete**.
+- **VERIFICATION STATE (honest):** hold ✓, gate mode ✓ (only the 2 honest
+  pump timeouts). FULL COURSE OPEN: STYLE_ROLL=0 flies (gate + slalom out +
+  back in 211 s) then FAILS return-gate AcquireTarget (120 s) looking back
+  through the slalom field — debug via sysid/fits/water1/return_probe.py;
+  with roll, valves overrun 600 s → W7 re-pacing (Center 40→20 s, adaptive
+  2nd roll segment, or DUR 900). Logs: sysid/fits/water1/w6_runs/.
+- Water-2 package: sequences/s2b_depth_release.yaml + s9b_roll_pump.yaml
+  (≤80 power; DRY-verify PENDING); esp32_depth publishes
+  /esp32_depth/temperature → logger temp.csv (F14; bench check PENDING);
+  sysid/WATER2_ADDENDUM.md = user checklist (PROTOCOL.md untouched — stale
+  .swp from the user's vim; fold in after they recover/delete it).
+- OPERATIONAL CAUTIONS (cost real time twice): pkill -f patterns self-match
+  the ssh/bash command text — kill by PID or bracket patterns; TWO
+  run_course instances concurrently pkill each other's nodes — never
+  overlap batches/sysid runs (sysid_run.sh also pkills submarine_node).
+
 ## W5 honest sim — BUILT + VERIFIED 2026-07-06 (Session B model-side)
 All sim upgrades live on the sub (backups `.pre-w5.20260706-003515`):
 - **sim_calibration.yaml mechanism**: config.py overlays `sim:` onto
@@ -269,41 +393,68 @@ Still USER-owned (PROTOCOL PART A): A1 hand-signs, A2 mass/dims/photos, A3 FOV.
   not physics data. 1 bench rest capture `*-a4_imu_rest-hand` (10 min, W2 A4).
 - 2026-07-06: `20260706-054048-esp32_chain_check-hand` (ESP32 depth chain verify:
   fused.csv 19.9 Hz ±2 cm in air, depth_raw.csv ~7 Hz) + 1 DRY dry_smoke coexistence.
+- 2026-07-07 WATER SESSION 1 (pool, floor at ~2.0-2.1 m sensor depth):
+  `20260707-023942-s1_static_trim-hand` (discard last 33 s),
+  `20260707-025309-s2_tilt_release-hand` (5 roll + 5 pitch, AT SURFACE),
+  `20260707-065749-s3_heave_staircase-live` (15.8 V; bottom from late down40),
+  `20260707-071456-s4_yaw_staircase_trim-live` (15.40 V; CLEAN),
+  `20260707-072200-s7_single_thruster_trim-live` (15.40 V; t2-t5 ON BOTTOM).
 
 ## Fits accepted (sysid/fits/ + sim_calibration.yaml)
-(none yet — first fits come from water session 1 data)
+WATER 1 (2026-07-07) — full detail sysid/fits/water1/water1_fit_report.md;
+all values live in sim_calibration.yaml (overlay-verified, 16 params):
+- Vertical thrust/motor 0.77/1.46/2.29 N at 20/30/40% → T≈0.0015·cmd² N
+  (deadband <10%; T(100)≈15 N/motor is a LONG extrapolation). S3 ODE fit
+  rms 4.7 mm. thrusterMaxForce 5.3 = linear band-match at 30-40% ONLY.
+- Heave quad drag 84 N/(m/s)² (sim had 8).
+- Buoyancy: +1 N surface → ~0 at 1.9 m → buoyancyDepthSlope 0.53 N/m (F13).
+- Yaw: τ≈8.4e-4·cmd² N·m (τ(40)=1.28); steady ±18/50/79/103 °/s at
+  10-40%, CCW/CW symmetric ≤3%; c2=0.352·(Iz/0.434)+c1 0.083 →
+  angularDragCoeff_Z 0.40 (sim had 3.0 — 8x overdamped); yawMomentArm 0.151
+  (⇒ corner lines ~55-63° toed OR weaker corner props; S5/S6 decide).
+- Ix_eff 0.58 kg·m² MEASURED (S7 known-torque pulses; added-mass ×2.1).
+- SUBMERGED righting k_roll=k_pitch≈4.6 N·m/rad (S7 post-pulse decays,
+  K med ~8 s⁻², BG≈4.7 cm pendulum), ωn≈3 rad/s ζ≈0.19. S2 surface releases
+  waterplane/trapped-water junk (K scatter ×17) — qualitative only.
+- STYLE ROLL NUMBERS: direct 90° needs ~5.2 N·m vs 3.5 available at 80%
+  (stall ~50°), 5.5 at 100% (marginal + F12 brownout). Resonance pump at
+  0.45-0.5 Hz (gain ~1/(2ζ)≈2.6) clears 90° at 80% → W6 builds the pump.
+- Corner pulse SIGNS all match allocation.yaml (+cmd=CCW all four);
+  vertical −40 (down) response ~1.5-1.8× the +40 (up) — fwd/rev prop
+  asymmetry, note for fine depth control.
 
-## Queue — USER (bench + water day 1; exact steps in PROTOCOL.md)
-1. ~~Fix depth sensor~~ DONE via ESP32 architecture (2026-07-06). Remaining:
-   SECURE the MS5837↔Xiao connector (init lottery at boot); quick health check
-   any time: `python3 sysid/esp32_check.py` in the container.
-2. PART A bench: A1 hand-signs (10 min, blocks the axis map) · A2 measurements +
-   photos · A3 camera FOV · (A5 prop-spin optional).
-3. Water session 1: S1, S2 (hand), S3, S4, S7 (LIVE). Fill meta.yaml per run.
+## Queue — USER (water session 2; PROTOCOL Part B S5/S6/S8/S9/S10 + additions
+## from sysid/fits/water1/water1_fit_report.md — PROTOCOL.md itself NOT edited,
+## a vim .swp was present 2026-07-07)
+1. ~~DECIDE F13~~ DECIDED 2026-07-07: pool-floor failures accepted +
+   retrieval plan. Revisit before comp (disarmed sub sinks at comp depth).
+2. Measure the actual pool depth (F15) + NEW LAUNCH RITUAL: float the sub in
+   the water ≥60 s BEFORE launching the stack (F14 wet baseline).
+3. Hardware sanity FIRST (new pid gains are sim-tuned only): motortest.sh
+   hold — 60 s depth hold at ~1 m — before any course attempt.
+4. Water 2 runs (full checklist sysid/WATER2_ADDENDUM.md): S5, S6, S8 (trim
+   variant, MID-WATER), S9, **S9b roll pump (style-roll decider)**, S2b
+   at-depth releases, S10. Fill meta.yaml battery_v every run.
 
-## Queue — model Session B (after water 1 data exists)
-1. Spot-verify: one verify_dry_run PASS + read a1 hand-signs report → lock axis map
-   (update F6 with the confirmed channel/sign).
-2. imu_rest_stats.py on the a4 run → sensor noise/rate numbers → calibration file.
-3. Fit vertical thrust/buoyancy/drag (S3), yaw authority/drag (S4), per-thruster
-   vectors + allocation refit (S7). Overlay plots into sysid/fits/.
-4. Depth-fusion offline replay vs S3 truth; fix F5; re-verify same logs.
-   [2026-07-06: fusion now LEGACY-ONLY (ESP32 path is default) — do this step only
-   if the i2c path is revived; otherwise skip to 4b.]
-4b. NEW (ESP32 depth): 10-min in-water/bench soak of the esp32 chain from the S3
-   logs — accept rate, outlier count+signature pre/post filter (driver status
-   counters + depth_raw.csv vs fused.csv), tune filter gates if the "obviously
-   bad" values slip through. S3 staircase now ALSO validates the ESP32 depth path
-   + filter end-to-end (its fusion-verification purpose is legacy-only).
-5. First sim_calibration.yaml (provenance comments per param).
-6. Sim upgrade W5: passive pitch DOF + righting moments + epsilon-plant mode +
-   venue configs (pool 1.52 m) + sensor models from measured stats.
-   NEW (ESP32 depth): refit the sim's depth-sensor emulation to the NEW stream
-   statistics (~7 Hz JSON, high success rate, occasional outliers, 20 Hz ZOH
-   republish) instead of the old 10–25 % MS5837-on-Pi model.
-- Session C: S5/S6/S8/S9 → complete fits → nav re-tune + feedforward → style-roll
-  strategy with numbers → W7 closed-loop verify + overlays.
-- Session D: residual-gap ranking, Opus handoff, PROTOCOL final.
+## Queue — model (next session)
+[W6 items all DONE 2026-07-07 PM — see "## W6 session".]
+1. Ritual spot-verify, then RETURN-GATE AcquireTarget bug: run
+   sysid/fits/water1/return_probe.py (in-container, SDL dummy) — dumps
+   reds/posts/_is_slalom_red exclusions/pair from return-leg viewpoints.
+   Suspect: _is_slalom_red falsely excluding the real far gate posts, or the
+   far pair below thresholds. Fix + verify STYLE_ROLL=0 full course.
+2. W7 valve re-pacing: Center timeout 40→20 s; ADAPTIVE second roll segment
+   (skip if the first timed out); then full course WITH roll, DUR 900 → aim
+   ×3 HW-faithful + ×1 ideal complete.
+3. DRY-verify s2b_depth_release + s9b_roll_pump (verify_dry_run PASS both) —
+   NEVER concurrently with course runs (sysid_run.sh pkills submarine_node).
+4. Bench HAND run → confirm temp.csv populates (esp32 attached).
+5. After water 2: S5/S6 fits (surge/sway drag, surgePitchCoupling, yaw-arm
+   disambiguation), S8 deadband → thrust-curve low end, S9/S9b → high-rate
+   roll drag (linear vs quad = pump verdict), S2b → righting at angle, F15
+   pool depth → venue config; consider reverse-thrust asymmetry in the plant
+   curve (S7 saw ~1.5× on verticals). Then W7 closed-loop verify + overlays.
+- Session E: residual-gap ranking, Opus handoff, PROTOCOL final.
 
 ## Inviolables
 Disarmed default · arm service gate · watchdog-to-zero (both hops) · countdown

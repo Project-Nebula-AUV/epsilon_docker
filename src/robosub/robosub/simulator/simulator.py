@@ -34,7 +34,18 @@ class SubmarineSimulator:
         self.scaleY = height * 0.8 / self.config.worldHeight
         self.font = pygame.font.Font(None, 36)
         self.smallFont = pygame.font.Font(None, 24)
-        self.cameraSurface = pygame.Surface((320, 240))
+        # HW MISMATCH (2026-07-06): real camera now captures 640x320 @ HFOV 74 deg
+        # (see sim_calibration.yaml cameraFov). This surface is still 320x240 --
+        # the FOV angle matches so fraction-based vision logic is unaffected, but
+        # any PIXEL-count threshold (min blob area, px tolerances) sees 2x scale
+        # vs hardware. Bump to (640, 320) as part of the W6 vision refit.
+        # W6 2026-07-07: 320x160 — the HARDWARE camera publishes 640x320
+        # (2:1, HFOV 74 -> VFOV 41.3 deg). The old 320x240 (4:3) gave the sim
+        # an 18-deg-taller vertical FOV than the vehicle (sim-easier: saw the
+        # gate bar/floor earlier when close). Same aspect at half resolution
+        # keeps the Pi render cheap; Vision min-area thresholds scale by
+        # actual image area, so detection behavior tracks automatically.
+        self.cameraSurface = pygame.Surface((320, 160))
         _assets_dir = os.path.join(os.path.dirname(__file__), "assets")
         try:
             bg_img = pygame.image.load(os.path.join(_assets_dir, "BackgroundImage.jpg")).convert()
@@ -153,24 +164,52 @@ class SubmarineSimulator:
                  if event.key == pygame.K_SPACE: self.paused = not self.paused
                  elif event.key == pygame.K_r: self.resetSimulation()
 
+    def _thruster_force(self, cmd: float) -> float:
+        """Epsilon-plant per-thruster force (N) from a normalized command.
+
+        Measured quadratic (water session 1, S3 fit): F = a*(cmd%)^2 up to
+        the edge of the measured data (40%), tangent-line above it — the
+        quadratic's own extrapolation to 100% is unverified and OPTIMISTIC,
+        the tangent is the conservative choice. Symmetric fwd/rev (S7 saw
+        ~1.5x stronger reverse on the verticals — refine after water 2)."""
+        a = self.config.thrustCurveQuadA
+        lin = self.config.thrustCurveLinearizeAbove
+        c = min(abs(cmd), 1.0) * 100.0
+        if c <= lin:
+            f = a * c * c
+        else:
+            f = a * lin * lin + 2.0 * a * lin * (c - lin)
+        return math.copysign(f, cmd)
+
     def applyPhysics(self, dt, commands: ThrusterCommands):
         # (Remains the same - 6-DoF Physics)
-        f_hfl = commands.hfl * self.thrusterMaxForce
-        f_hfr = commands.hfr * self.thrusterMaxForce
-        f_hal = commands.hal * self.thrusterMaxForce
-        f_har = commands.har * self.thrusterMaxForce
-        f_vp = commands.vp * self.thrusterMaxForce
-        f_vs = commands.vs * self.thrusterMaxForce
+        if self.config.epsilonPlant:
+            # Actuation exactly as measured on the vehicle: quadratic
+            # per-thruster curves; yaw arm fitted from S4 (torque, not
+            # geometry — it folds in the unknown corner toe angle).
+            f_hfl = self._thruster_force(commands.hfl)
+            f_hfr = self._thruster_force(commands.hfr)
+            f_hal = self._thruster_force(commands.hal)
+            f_har = self._thruster_force(commands.har)
+            f_vp = self._thruster_force(commands.vp)
+            f_vs = self._thruster_force(commands.vs)
+            yaw_arm = self.config.epsilonPlantYawArm
+        else:
+            f_hfl = commands.hfl * self.thrusterMaxForce
+            f_hfr = commands.hfr * self.thrusterMaxForce
+            f_hal = commands.hal * self.thrusterMaxForce
+            f_har = commands.har * self.thrusterMaxForce
+            f_vp = commands.vp * self.thrusterMaxForce
+            f_vs = commands.vs * self.thrusterMaxForce
+            yaw_arm = self.config.yawMomentArm
         cos_45 = 0.7071
         thrust_surge = (f_hfl + f_hfr + f_hal + f_har) * cos_45
         thrust_sway  = (f_hfl - f_hfr - f_hal + f_har) * cos_45
         thrust_heave = f_vp + f_vs
-        sub_w_half = self.config.submarineWidth / 2
         # Yaw torque with an explicit moment arm (was an implicit 1.0 m —
         # ~3x optimistic on this hull; roll below has always used its arm).
-        thrust_yaw  = ((commands.hfl - commands.hfr + commands.hal - commands.har)
-                       * self.thrusterMaxForce * self.config.yawMomentArm)
-        thrust_roll = (f_vp - f_vs) * sub_w_half   # port−starboard differential → roll
+        thrust_yaw  = (f_hfl - f_hfr + f_hal - f_har) * yaw_arm
+        thrust_roll = (f_vp - f_vs) * self.config.rollMomentArm   # port−starboard differential → roll
         h_rad = math.radians(self.subPhysics.heading)
         cos_h, sin_h = math.cos(h_rad), math.sin(h_rad)
         vx_w, vy_w, vz_w = self.subPhysics.velocity_x, self.subPhysics.velocity_y, self.subPhysics.velocity_z
@@ -212,7 +251,13 @@ class SubmarineSimulator:
         # Bow-up pitch tilts the surge thrust line: its world-vertical
         # component lifts the vehicle (z is down+), which is exactly why the
         # real sub needs extra down-thrust while surging.
-        fz = total_force_heave - self.netBuoyancyForce - thrust_surge * math.sin(p_rad)
+        # Depth-dependent buoyancy (water session 1, 2026-07-07): compressible
+        # volume makes the real sub near-neutral→negative by ~2 m (it sat on
+        # the pool floor with zero thrust). z is down+, so lost buoyancy ADDS
+        # to fz (sinks). Slope 0.0 = legacy incompressible behavior.
+        net_buoyancy = (self.netBuoyancyForce
+                        - self.config.buoyancyDepthSlope * max(self.subPhysics.z, 0.0))
+        fz = total_force_heave - net_buoyancy - thrust_surge * math.sin(p_rad)
         ax = fx / self.subMass
         ay = fy / self.subMass
         az = fz / self.subMass
@@ -332,16 +377,32 @@ class SubmarineSimulator:
                  avg_dist = (r_bar[2] + r_bot[2]) / 2
                  drawable.append((avg_dist, 'line', pole_color, r_bar[:2], r_bot[:2], 5)) # Pole is RED
 
-             # RoboSub Task-1-style trim: a short divider hanging from the
-             # bar's midpoint, and two placard "pictures" hanging near the
-             # posts — cosmetic only, distinct color so vision (which only
-             # looks for RED/WHITE blobs) ignores them.
+             # 2026 gate trim, HONEST COLORS (2026-07-07 W6): the real
+             # divider plate is RED and the maker boxes are BLACK (left) and
+             # RED (right, "Red-Right-Above") — red-keyed vision MUST cope
+             # with red blobs that are not posts. The divider is rejected by
+             # the pair height-ratio filter (0.61 m vs 1.5 m posts); the red
+             # box by the aspect filter (square). Pairing scans ALL candidate
+             # pairs so the divider sitting between the posts cannot mask the
+             # true (L,R) pair.
              pc = self.prequal_config
              c_bar = self.project3D((g.x, g.center_y, bar_z))
              c_bot = self.project3D((g.x, g.center_y, bar_z + pc.GATE_DIVIDER_HEIGHT))
              if c_bar and c_bot:
                  avg_dist = (c_bar[2] + c_bot[2]) / 2
-                 drawable.append((avg_dist, 'line', GRAY, c_bar[:2], c_bot[:2], 4))
+                 drawable.append((avg_dist, 'line', RED, c_bar[:2], c_bot[:2], 4))
+
+             box_hw = pc.GATE_PICTURE_WIDTH / 2
+             for side, box_color in ((-1, BLACK), (1, RED)):
+                 by = g.center_y + side * 0.30 * half_w
+                 btl = self.project3D((g.x, by - box_hw, bar_z + 0.05))
+                 btr = self.project3D((g.x, by + box_hw, bar_z + 0.05))
+                 bbr = self.project3D((g.x, by + box_hw, bar_z + 0.05 + pc.GATE_PICTURE_HEIGHT))
+                 bbl = self.project3D((g.x, by - box_hw, bar_z + 0.05 + pc.GATE_PICTURE_HEIGHT))
+                 if btl and btr and bbr and bbl:
+                     avg_dist = (btl[2] + btr[2] + bbr[2] + bbl[2]) / 4
+                     drawable.append((avg_dist, 'polygon', box_color,
+                                      [btl[:2], btr[:2], bbr[:2], bbl[:2]], 0))
 
              pic_hw = pc.GATE_PICTURE_WIDTH / 2
              for side in (-1, 1):
@@ -418,7 +479,7 @@ class SubmarineSimulator:
         dot_x = gauge_cx + gauge_r * math.sin(roll_rad)
         dot_y = gauge_cy - gauge_r * math.cos(roll_rad)
         pygame.draw.circle(self.screen, RED, (int(dot_x), int(dot_y)), 4)
-        self._renderUi(); scaled_camera = pygame.transform.scale(self.cameraSurface, (400, 300)); self.screen.blit(scaled_camera, (self.width-420, 20)); pygame.draw.rect(self.screen, BLACK, (self.width-420, 20, 400, 300), 2); pygame.display.flip()
+        self._renderUi(); scaled_camera = pygame.transform.scale(self.cameraSurface, (400, 200)); self.screen.blit(scaled_camera, (self.width-420, 20)); pygame.draw.rect(self.screen, BLACK, (self.width-420, 20, 400, 200), 2); pygame.display.flip()
 
     def _drawThrusterBar(self, x, y, label, value):
         # (Remains the same)

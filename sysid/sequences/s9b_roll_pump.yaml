@@ -1,0 +1,45 @@
+# S9b roll resonance pump (water 2, W6 2026-07-07). Water 1 measured
+# omega_n ~3 rad/s (0.48 Hz), zeta ~0.19: direct roll stalls ~50 deg at
+# safe power, but pumping AT RESONANCE should swing past 90. This drives
+# open-loop square-wave vertical differentials at three frequencies around
+# resonance. THE question it answers: does the swing GROW past 90 deg
+# (roll drag at 2-3 rad/s is closer to the linear model -> nav pump will
+# complete full rotations) or plateau ~70 (quadratic model -> style roll
+# needs another plan)? Watch amplitude per block in /sensors/roll.
+# Power <=80 for the F12 brownout margin. USER: mid-water ~1 m, clear of
+# walls; expect vigorous rolling — abort (arm false) if anything binds.
+name: s9b_roll_pump
+mode: thrust
+max_abs: 80.0
+steps:
+  - {dur: 3.0, thrust: [0, 0, 0, 0, 0, 0], label: baseline}
+  # block A: 0.45 Hz (1.11 s half-periods), +-60
+  - {dur: 1.11, thrust: [60, -60, 0, 0, 0, 0], label: A1+}
+  - {dur: 1.11, thrust: [-60, 60, 0, 0, 0, 0], label: A1-}
+  - {dur: 1.11, thrust: [60, -60, 0, 0, 0, 0], label: A2+}
+  - {dur: 1.11, thrust: [-60, 60, 0, 0, 0, 0], label: A2-}
+  - {dur: 1.11, thrust: [60, -60, 0, 0, 0, 0], label: A3+}
+  - {dur: 1.11, thrust: [-60, 60, 0, 0, 0, 0], label: A3-}
+  - {dur: 1.11, thrust: [60, -60, 0, 0, 0, 0], label: A4+}
+  - {dur: 1.11, thrust: [-60, 60, 0, 0, 0, 0], label: A4-}
+  - {dur: 8.0, thrust: [0, 0, 0, 0, 0, 0], label: releaseA}
+  # block B: 0.48 Hz (1.04 s half-periods), +-80
+  - {dur: 1.04, thrust: [80, -80, 0, 0, 0, 0], label: B1+}
+  - {dur: 1.04, thrust: [-80, 80, 0, 0, 0, 0], label: B1-}
+  - {dur: 1.04, thrust: [80, -80, 0, 0, 0, 0], label: B2+}
+  - {dur: 1.04, thrust: [-80, 80, 0, 0, 0, 0], label: B2-}
+  - {dur: 1.04, thrust: [80, -80, 0, 0, 0, 0], label: B3+}
+  - {dur: 1.04, thrust: [-80, 80, 0, 0, 0, 0], label: B3-}
+  - {dur: 1.04, thrust: [80, -80, 0, 0, 0, 0], label: B4+}
+  - {dur: 1.04, thrust: [-80, 80, 0, 0, 0, 0], label: B4-}
+  - {dur: 8.0, thrust: [0, 0, 0, 0, 0, 0], label: releaseB}
+  # block C: 0.53 Hz (0.95 s half-periods), +-80 — above resonance
+  - {dur: 0.95, thrust: [80, -80, 0, 0, 0, 0], label: C1+}
+  - {dur: 0.95, thrust: [-80, 80, 0, 0, 0, 0], label: C1-}
+  - {dur: 0.95, thrust: [80, -80, 0, 0, 0, 0], label: C2+}
+  - {dur: 0.95, thrust: [-80, 80, 0, 0, 0, 0], label: C2-}
+  - {dur: 0.95, thrust: [80, -80, 0, 0, 0, 0], label: C3+}
+  - {dur: 0.95, thrust: [-80, 80, 0, 0, 0, 0], label: C3-}
+  - {dur: 0.95, thrust: [80, -80, 0, 0, 0, 0], label: C4+}
+  - {dur: 0.95, thrust: [-80, 80, 0, 0, 0, 0], label: C4-}
+  - {dur: 8.0, thrust: [0, 0, 0, 0, 0, 0], label: tail}

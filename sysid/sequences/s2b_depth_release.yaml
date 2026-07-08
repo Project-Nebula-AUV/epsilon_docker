@@ -1,0 +1,24 @@
+# S2b at-depth tilt releases (water 2; replaces the surface S2 whose
+# waterplane/trapped-water physics made righting unfittable — see
+# sysid/fits/water1/water1_fit_report.md). Differential vertical pulses kick
+# a roll excursion, the long zero gaps are clean SUBMERGED release decays at
+# bigger angles than S7 gave us (2-5 deg). Confirms/refines k=4.6 N*m/rad +
+# damping. USER: start mid-water ~1 m, away from walls; sub drifts up slowly
+# between pulses (B~+0.4 N at 1 m) — re-position between blocks if needed.
+name: s2b_depth_release
+mode: thrust
+max_abs: 80.0
+steps:
+  - {dur: 3.0, thrust: [0, 0, 0, 0, 0, 0], label: baseline}
+  - {dur: 2.5, thrust: [40, -40, 0, 0, 0, 0], label: kick+40}
+  - {dur: 6.0, thrust: [0, 0, 0, 0, 0, 0], label: release1}
+  - {dur: 2.5, thrust: [-40, 40, 0, 0, 0, 0], label: kick-40}
+  - {dur: 6.0, thrust: [0, 0, 0, 0, 0, 0], label: release2}
+  - {dur: 2.5, thrust: [60, -60, 0, 0, 0, 0], label: kick+60}
+  - {dur: 6.0, thrust: [0, 0, 0, 0, 0, 0], label: release3}
+  - {dur: 2.5, thrust: [-60, 60, 0, 0, 0, 0], label: kick-60}
+  - {dur: 6.0, thrust: [0, 0, 0, 0, 0, 0], label: release4}
+  - {dur: 3.0, thrust: [80, -80, 0, 0, 0, 0], label: kick+80}
+  - {dur: 7.0, thrust: [0, 0, 0, 0, 0, 0], label: release5}
+  - {dur: 3.0, thrust: [-80, 80, 0, 0, 0, 0], label: kick-80}
+  - {dur: 7.0, thrust: [0, 0, 0, 0, 0, 0], label: tail}

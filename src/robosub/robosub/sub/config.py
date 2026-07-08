@@ -59,7 +59,12 @@ class SimulationConfig:
     # previously used an implicit 1.0 m arm — ~3x optimistic yaw authority
     # on a 0.46 m vehicle.
     yawMomentArm: float = 0.32
-    
+    # Roll moment arm (m): lateral lever of each vertical thruster about the
+    # roll axis. Default keeps the legacy submarineWidth/2 = 0.23 behavior;
+    # the A2 tape-measure value (0.184 = half the 14.5 in pair spacing) lands
+    # via sim_calibration.yaml.
+    rollMomentArm: float = 0.23
+
     # Drag Coefficients (TUNE THESE)
     surgeDragCoeff: float = 1.5   # Forward/backward 
     swayDragCoeff: float = 8.0    # Side-to-side
@@ -89,11 +94,37 @@ class SimulationConfig:
     subVolume: float = 0.0041 # (m^3) e.g., 4.1L
     # ---
     waterDensity: float = 1000.0 # (kg/m^3)
+    # Buoyancy lost per meter of depth (N/m). Water session 1 (2026-07-07,
+    # S3/S7): the sub that floats at the surface sat on the pool floor at
+    # ~2 m with zero thrust — ~0.5-0.7 L of compressible volume (trapped
+    # air / enclosure flex). 0.0 = legacy incompressible behavior.
+    buoyancyDepthSlope: float = 0.0
     # ---
+
+    # --- Epsilon-plant actuation (2026-07-07, water session 1 S3/S4 fits) ---
+    # When on, per-thruster force comes from the MEASURED quadratic curve
+    # instead of cmd*thrusterMaxForce:
+    #   F(c%) = thrustCurveQuadA * c^2            for c <= linearizeAbove
+    #   F(c%) = tangent-line extrapolation        above (conservative: the
+    #           quadratic itself extrapolates to ~15 N at 100%, unverified;
+    #           the tangent gives ~9.6 N)
+    # Yaw torque uses epsilonPlantYawArm (S4 tau(40%)=1.28 N*m / 4*F(40));
+    # roll keeps the tape-measured rollMomentArm (S7 cross-checked). The
+    # legacy linear path is untouched when this is False.
+    epsilonPlant: bool = False
+    thrustCurveQuadA: float = 0.0015       # N per (cmd %)^2 — S3 fit
+    thrustCurveLinearizeAbove: float = 40.0  # % — edge of measured data
+    epsilonPlantYawArm: float = 0.133      # m — S4 1.28/(4*2.40)
 
     def __post_init__(self):
         self._apply_venue()
         self._apply_calibration()
+        # Env override LAST so run harnesses can force the actuation mode
+        # regardless of what the calibration file says.
+        ep = os.environ.get('ROBOSUB_EPSILON_PLANT')
+        if ep is not None:
+            self.epsilonPlant = ep.strip() not in ('', '0', 'false', 'False')
+            print(f"[config] epsilonPlant={self.epsilonPlant} (env)", flush=True)
 
     def _apply_venue(self):
         """ROBOSUB_VENUE=pool|comp world geometry. Default: legacy 2.1 m."""

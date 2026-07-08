@@ -66,6 +66,7 @@ class SysidLogger(Node):
         self._open('attitude', 't,heading_deg,roll_deg')
         self._open('cmd', 't,t0,t1,t2,t3,t4,t5')
         self._open('markers', 't,text')
+        self._open('temp', 't,temp_c')   # F14: esp32 sensor temperature
 
         self._innov = float('nan')
         self._stale = -1
@@ -88,6 +89,7 @@ class SysidLogger(Node):
         # driver's topics instead of fusion's. Only one source runs per launch.
         self.create_subscription(Float32, '/esp32_depth/velocity_z', self.on_vz, 10)
         self.create_subscription(Bool, '/esp32_depth/stale', self.on_stale, 10)
+        self.create_subscription(Float32, '/esp32_depth/temperature', self.on_temp, 10)
         self.create_subscription(Float32, '/sensors/heading', self.on_heading, qos_be)
         self.create_subscription(Float32, '/sensors/roll', self.on_roll, qos_be)
         self.create_subscription(Float64MultiArray, '/thrust_control', self.on_cmd, 10)
@@ -125,6 +127,9 @@ class SysidLogger(Node):
 
     def on_depth_raw(self, m):
         self._w('depth_raw', '%.4f,%.4f' % (self._t(), m.data))
+
+    def on_temp(self, m):
+        self._w('temp', '%.4f,%.2f' % (self._t(), m.data))
 
     def on_fused(self, m):
         self._w('fused', '%.4f,%.4f,%.4f,%.4f,%d'

@@ -109,10 +109,19 @@ class Vision:
             self.marker_blobs = []
             self.red_blobs    = []
         else:
-            self.marker_blobs = find_blobs_hsv(img, MARKER_HSV_RANGE,
-                                               self.min_pole_pixels)
-            self.red_blobs    = find_blobs_hsv(img, RED_HSV_RANGES,
-                                               self.min_gate_pixels)
+            # Min-area thresholds are calibrated in SIM-REFERENCE pixels
+            # (320x240). The hardware camera publishes 640x320 — 2.67x the
+            # pixel count — so scale by the actual image area or every
+            # threshold is silently ~2.7x stricter in the water than in the
+            # sim (W6 2026-07-07; sysid RESUME "pixel-count 2x scale" item).
+            h, w = img.shape[:2]
+            scale = (h * w) / (240.0 * 320.0)
+            self.marker_blobs = find_blobs_hsv(
+                img, MARKER_HSV_RANGE,
+                max(1, int(round(self.min_pole_pixels * scale))))
+            self.red_blobs    = find_blobs_hsv(
+                img, RED_HSV_RANGES,
+                max(1, int(round(self.min_gate_pixels * scale))))
         self._clear_cache()
 
     # --- Green pole (marker) ---
@@ -156,39 +165,73 @@ class Vision:
         for w in self.marker_blobs:
             if w['height'] <= w['width'] * 1.2:
                 continue
+            # W6b (2026-07-08): a TRUE gatelet is the same pole type at the
+            # same distance — ratio ~1.0, lateral separation ~1.7x height
+            # (1.524 m gap / 0.9 m pole), bottoms tightly aligned. The old
+            # loose bands (0.5-2.0 ratio, 0-2.5h separation, 0.6h bottoms)
+            # let EVERY red find SOME white on the return leg (4+ slalom
+            # whites in frame) — the real gate posts were all excluded and
+            # the return gate could never be acquired.
             ratio = w['height'] / max(r['height'], 1)
-            if not (0.5 <= ratio <= 2.0):
+            if not (0.7 <= ratio <= 1.45):
                 continue
-            if (abs(r['max_y'] - w['max_y']) < max(r['height'], w['height']) * 0.6
-                    and abs(r['center_x'] - w['center_x']) < 2.5 * max(r['height'], w['height'])):
+            mean_h = 0.5 * (r['height'] + w['height'])
+            sep = abs(r['center_x'] - w['center_x'])
+            if not (0.8 * mean_h <= sep <= 2.4 * mean_h):
+                continue
+            if abs(r['max_y'] - w['max_y']) < max(r['height'], w['height']) * 0.35:
                 return True
         return False
+
+    def get_gate_post_blobs(self) -> List[Dict]:
+        """Red blobs that could plausibly be GATE POSTS: vertical aspect
+        (excludes the 2026 maker boxes) and not a slalom-gatelet red. This is
+        the ONLY red set gate behaviors should steer by — blind fallbacks
+        that chased raw red_blobs went after the red maker box (W6)."""
+        return [b for b in self.red_blobs
+                if b['height'] > b['width'] * 1.5
+                and not self._is_slalom_red(b)]
 
     def get_gate_pair(self) -> Optional[Tuple[Dict, Dict]]:
         if not self._found_best_gate_pair:
             self._found_best_gate_pair = True
-            candidates = [b for b in self.red_blobs
-                          if b['height'] > b['width'] * 1.5
-                          and not self._is_slalom_red(b)]
+            candidates = self.get_gate_post_blobs()
             if len(candidates) < 2:
                 self._best_gate_pair = None
             else:
                 candidates.sort(key=lambda p: p['center_x'])
                 best, min_diff = None, float('inf')
+                # ALL pairs, not adjacent-only: the 2026 gate hangs a RED
+                # divider between the posts, so the x-sorted sequence is
+                # (L, divider, R) and the true pair is non-adjacent. The
+                # divider itself never survives the height-ratio filter
+                # (0.61 m plate vs 1.5 m posts).
                 for i in range(len(candidates) - 1):
-                    p1, p2 = candidates[i], candidates[i + 1]
-                    h_min = min(p1['height'], p2['height'])
-                    h_max = max(p1['height'], p2['height'])
-                    y_overlap = (min(p1['max_y'], p2['max_y'])
-                                 - max(p1['min_y'], p2['min_y']))
-                    # Real gate posts sit at the same distance: similar
-                    # heights (ratio, not an absolute pixel diff) and
-                    # substantial vertical overlap.
-                    if (y_overlap > 0.5 * h_min and h_min > 0.55 * h_max):
-                        h_diff = h_max - h_min
-                        if h_diff < min_diff:
-                            min_diff = h_diff
-                            best = (p1, p2)
+                    for j in range(i + 1, len(candidates)):
+                        p1, p2 = candidates[i], candidates[j]
+                        h_min = min(p1['height'], p2['height'])
+                        h_max = max(p1['height'], p2['height'])
+                        h_mean = 0.5 * (p1['height'] + p2['height'])
+                        y_overlap = (min(p1['max_y'], p2['max_y'])
+                                     - max(p1['min_y'], p2['min_y']))
+                        sep = p2['center_x'] - p1['center_x']
+                        # Real gate posts sit at the same distance: similar
+                        # heights (ratio, not an absolute pixel diff) and
+                        # substantial vertical overlap. AND the gate has a
+                        # fixed shape: width/post-height = 2.0 (3.0/1.5 comp,
+                        # 2.0/1.0 pool practice gate), compressed by oblique
+                        # viewing — so separation must be ~0.8-3.0x the mean
+                        # height. Without this, two IN-LINE slalom reds at
+                        # different distances (tiny separation, similar
+                        # apparent heights) pair as a phantom gate and
+                        # DriveUntilTargetLost chases them into the slalom
+                        # field (w6_full_hw1: 15 m overshoot, mission fail).
+                        if (y_overlap > 0.5 * h_min and h_min > 0.55 * h_max
+                                and 0.8 * h_mean <= sep <= 3.0 * h_mean):
+                            h_diff = h_max - h_min
+                            if h_diff < min_diff:
+                                min_diff = h_diff
+                                best = (p1, p2)
                 self._best_gate_pair = best
         return self._best_gate_pair
 

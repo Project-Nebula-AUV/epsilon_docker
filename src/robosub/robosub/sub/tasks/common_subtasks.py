@@ -309,14 +309,20 @@ class CenterOnGateHalf(Subtask):
     BLIND_SWAY = 0.25
     SIGN_MEMORY_S = 1.5       # how long the last seen direction stays valid
     SEP_TARGET = 0.95         # pair separation / half-width at ~3 m standoff
-    SEP_BAND = 0.18           # completion requires range inside this band
-    RANGE_GAIN = 0.4
+    SEP_BAND = 0.28           # completion requires range inside this band
+    RANGE_GAIN = 0.6
     TALL_POST_FRAC = 0.4      # single post taller than this frac of frame
                               # height = we are too close (blind regime)
 
-    def __init__(self, side: str = 'right', tolerance_px: float = 6.0,
-                 hold_ticks: int = 12, rate_tol: float = 0.04,
-                 timeout: float = 40.0):
+    # W6 2026-07-07: completion tolerances re-derived for the MEASURED sensor
+    # noise (compass sigma 1.32 deg at 18.2 Hz -> ~4-5 px of physical pixel
+    # jitter at standoff, pixel-rate floor ~0.05-0.08/s). The old 6 px /
+    # 0.04/s x12 ticks were tuned on the quiet legacy sim and are
+    # unattainable with the real compass — every Center instance burned its
+    # full 40 s timeout and the mission degraded to timeout-stumbling.
+    def __init__(self, side: str = 'right', tolerance_px: float = 10.0,
+                 hold_ticks: int = 8, rate_tol: float = 0.10,
+                 timeout: float = 20.0):
         super().__init__()
         self.side = side
         self.tol_px = tolerance_px
@@ -349,15 +355,17 @@ class CenterOnGateHalf(Subtask):
         if pair is None:
             self._blind += dt
             self._ok = 0
-            if vision.red_blobs:
+            posts = vision.get_gate_post_blobs()
+            if posts:
                 # A single visible post is ambiguous — resolve by RANGE
                 # (its apparent height). TALL post: we are too close, the
                 # opening fell off the frame edge — back away and sway away
                 # from the post. SHORT post: we are at standoff but far off
                 # axis, the whole gate sits to one side — sway TOWARD it.
                 # (One sign for both regimes ran the vehicle diagonally
-                # into the pool corner.)
-                blob = max(vision.red_blobs, key=lambda b: b['area'])
+                # into the pool corner.) POST blobs only — chasing raw
+                # red_blobs steered at the 2026 red maker box (W6).
+                blob = max(posts, key=lambda b: b['area'])
                 sign = 1.0 if blob['center_x'] > cam_w / 2 else -1.0
                 if blob['height'] > self.TALL_POST_FRAC * cam_h:
                     return SubtaskStatus.RUNNING, sub.ctrl.hold(
@@ -388,8 +396,11 @@ class CenterOnGateHalf(Subtask):
             self._sep_rate += 0.3 * ((sep - self._sep_prev) / dt
                                      - self._sep_rate)
         self._sep_prev = sep
+        # Caps sized for the quadratic plant: below ~0.12 normalized a
+        # corner command produces near-zero force (deadband), so the old
+        # ±0.15/0.2 range-hold could not actually move the vehicle.
         surge = float(np.clip((self.SEP_TARGET - sep) * self.RANGE_GAIN,
-                              -0.2, 0.15))
+                              -0.35, 0.25))
         cmds = sub.ctrl.track_pixel_sway(sensors, dt, self.target_depth,
                                          err, self._axis, surge=surge)
         tol = self.tol_px / (cam_w / 2.0)
@@ -470,7 +481,18 @@ class DriveThroughGate(Subtask):
 
 
 class StyleRollSubtask(Subtask):
-    """Barrel roll through `degrees`, then level out.
+    """Barrel roll through `degrees` via a RESONANCE PUMP, then level out.
+
+    Water session 1 (2026-07-07) measured submerged righting ~4.6 N*m/rad
+    against ~2.6-3.5 N*m of differential-vertical torque at safe power:
+    a direct roll STALLS near 50 degrees. But the roll axis is a lightly
+    damped pendulum (omega_n ~3 rad/s, zeta ~0.19), so torque applied IN
+    PHASE WITH THE ROLL RATE (bang-bang: tau = P*sign(rate)) pumps energy
+    at the natural frequency — no hardcoded 0.45 Hz, it self-locks. Once a
+    swing crosses ~100 degrees still climbing, righting weakens past
+    vertical: switch to constant torque in that direction and carry through
+    the top into full rotations. On a plant with enough direct authority
+    the pump degenerates into the old direct spin (sign(rate) never flips).
 
     The accumulated angle integrates imu.gyro_x — the sensor roll channel
     folds at +/-90 degrees and cannot track a full rotation; the folded
@@ -482,13 +504,19 @@ class StyleRollSubtask(Subtask):
     """
     ON_TIMEOUT = 'complete'
     STOP_LEAD_DEG = 15.0
+    COMMIT_RATE = 2.4     # rad/s near upright commits to full rotation:
+                          # KE(2.4) ~ 1.7 J vs the ~0.9 J righting-hump
+                          # deficit at 0.8 power (offline plant sim W6)
+    COMMIT_ANG = 60.0     # deg from upright (mod 360) where KE is honest
+    UNCOMMIT_RATE = -0.3  # rad/s against carry dir -> stalled, resume pump
+    PUMP_MIN_RATE = 0.05  # rad/s — below this, steer by position not rate
 
-    def __init__(self, degrees: float = 720.0, roll_power: float = 0.95,
+    def __init__(self, degrees: float = 720.0, roll_power: float = 0.80,
                  settle_deg: float = 2.5, settle_rate: float = 0.08,
                  timeout: float = 90.0):
         super().__init__()
         self.degrees = degrees
-        self.roll_power = roll_power
+        self.roll_power = roll_power   # 0.80 cap: F12 brownout margin
         self.settle_deg = settle_deg
         self.settle_rate = settle_rate
         self.TIMEOUT = timeout
@@ -496,26 +524,79 @@ class StyleRollSubtask(Subtask):
         self._axis: Optional[float] = None
         self.accum = 0.0
         self.spinning = True
+        self._carry_dir = 0.0   # 0 = still pumping; +/-1 = committed
 
     def on_enter(self, sub, sensors, vision, context):
         self.target_depth = context.get('target_depth', sensors.depth)
         self._axis = context.get('axis', sensors.heading)
         self.accum = 0.0
         self.spinning = True
+        self._carry_dir = 0.0
         print(f"INFO: StyleRoll {self.degrees:.0f} deg at "
-              f"{self.target_depth:.2f} m, axis {self._axis:.1f}")
+              f"{self.target_depth:.2f} m, axis {self._axis:.1f} (pump mode)")
+
+    def on_exit(self, sub, sensors, vision, context):
+        # W7 pacing: if this segment could not finish its rotation (timeout
+        # or leveled short), later segments will do no better — mark the
+        # mission so they complete instantly instead of burning 45 s each.
+        if (self.timed_out
+                or abs(self.accum) < abs(self.degrees) - self.STOP_LEAD_DEG):
+            context['style_roll_skip'] = True
+
+    def _pump_torque(self, rate: float) -> float:
+        """Bang-bang energy pump, robust to the rate crossing zero at the
+        swing extremes (and to corrupt zeroed gyro reads): near-zero rate
+        steers by position — push AWAY from upright on the return swing."""
+        if abs(rate) > self.PUMP_MIN_RATE:
+            return math.copysign(self.roll_power, rate)
+        if abs(self.accum) > 5.0:
+            return -math.copysign(self.roll_power, self.accum)
+        return math.copysign(self.roll_power, self.degrees)
 
     def execute(self, sub, dt, sensors, vision, config, context):
-        self.accum += math.degrees(sensors.imu.gyro_x) * dt
+        if context.get('style_roll_skip'):
+            print("INFO: StyleRoll skipped (earlier segment could not rotate)")
+            return SubtaskStatus.COMPLETED, sub.ctrl.hold(
+                sensors, dt, self.target_depth, self._axis)
+        rate = sensors.imu.gyro_x
+        self.accum += math.degrees(rate) * dt
 
         if self.spinning:
-            if abs(self.accum) >= abs(self.degrees) - self.STOP_LEAD_DEG:
-                self.spinning = False
+            ang_up = abs(self.accum) % 360.0   # distance past the last upright
+            near_upright = (ang_up < self.COMMIT_ANG
+                            or ang_up > 360.0 - self.COMMIT_ANG)
+            if self._carry_dir == 0.0:
+                # Pump phase. Commit to rotation only with real kinetic
+                # energy in the bank — rate threshold NEAR UPRIGHT, where
+                # measured KE is honest (at the swing extremes rate is
+                # always small). Offline plant sim: with linear-model roll
+                # drag this completes 720 in ~11 s; with the (pessimistic,
+                # unverified) quadratic model it pumps ~70 deg swings and
+                # times out COMPLETED — mission-safe either way. S9 decides.
+                if abs(rate) >= self.COMMIT_RATE and near_upright:
+                    self._carry_dir = math.copysign(1.0, rate)
+                    print(f"INFO: StyleRoll pump -> carry at "
+                          f"{self.accum:+.0f} deg, {rate:+.1f} rad/s")
+            elif rate * self._carry_dir < self.UNCOMMIT_RATE:
+                # Stalled against the righting hump and falling back:
+                # abandon the attempt and pump the return swing instead.
+                print(f"INFO: StyleRoll carry stalled at {self.accum:+.0f} "
+                      f"deg — back to pump")
+                self._carry_dir = 0.0
+            if self._carry_dir != 0.0:
+                # Rotations score either direction; chase |degrees| in the
+                # direction the pump actually launched.
+                if abs(self.accum) >= abs(self.degrees) - self.STOP_LEAD_DEG:
+                    self.spinning = False
+                else:
+                    return SubtaskStatus.RUNNING, sub.ctrl.roll_spin(
+                        sensors, dt, self.target_depth,
+                        self._carry_dir * self.roll_power,
+                        self._axis, self.accum)
             else:
                 return SubtaskStatus.RUNNING, sub.ctrl.roll_spin(
                     sensors, dt, self.target_depth,
-                    math.copysign(self.roll_power, self.degrees),
-                    self._axis, self.accum)
+                    self._pump_torque(rate), self._axis, self.accum)
 
         cmds = sub.ctrl.hold(sensors, dt, self.target_depth, self._axis)
         if (abs(angle_diff(0.0, sensors.roll)) < self.settle_deg
@@ -526,7 +607,7 @@ class StyleRollSubtask(Subtask):
         return SubtaskStatus.RUNNING, cmds
 
     def get_dynamic_name(self, context):
-        phase = 'spin' if self.spinning else 'level'
+        phase = ('carry' if self._carry_dir else 'pump') if self.spinning else 'level'
         return f"{self.name}({self.accum:+.0f}/{self.degrees:.0f} {phase})"
 
 

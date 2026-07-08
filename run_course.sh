@@ -64,6 +64,10 @@ if [ "${LEGACY_FUSED:-0}" = "1" ]; then
   FUS=$!
 elif [ "$HW_FAITHFUL" = "1" ]; then
   echo "[run] HW-FAITHFUL sensing (ESP32 depth-chain emulation + zeroed lateral velocity)"
+  # W6 2026-07-07: HW-faithful now ALSO means the measured actuation
+  # (quadratic thrust curves). EPSILON_PLANT=0 forces the legacy linear map.
+  export ROBOSUB_EPSILON_PLANT="${EPSILON_PLANT:-1}"
+  echo "[run] epsilon-plant actuation: $ROBOSUB_EPSILON_PLANT"
   SIM_ARGS="--ros-args -p depth_mode:=esp32 -p hw_velocity:=true"
 fi
 

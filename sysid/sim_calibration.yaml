@@ -5,6 +5,12 @@
 # here that makes the sim EASIER than reality.
 #
 # Path override: ROBOSUB_CALIBRATION (default /home/robosub/robosub_ws/sysid/sim_calibration.yaml)
+#
+# WATER SESSION 1 (2026-07-07, pool, battery 15.4-15.8 V) landed the first
+# dynamics fits: runs 20260707-{023942 s1,025309 s2,065749 s3,071456 s4,
+# 072200 s7}; analysis in sysid/fits/water1_fit_report.md. Pool floor was at
+# ~2.0-2.1 m sensor depth (pool DEEPER than the 1.52 m venue assumption —
+# user-confirmed "deeper than 1.5 m"; exact depth still unmeasured).
 
 sim:
   # Camera horizontal FOV (deg): 74.0 USER-MEASURED manually 2026-07-06 at
@@ -14,21 +20,79 @@ sim:
   # superseded when camera.py defaults moved to 640x320 (29.8 Hz after the
   # rclpy bytes-validator publish fix).
   cameraFov: 74.0
-  # --- SimulationConfig overrides (dynamics) ---
-  # A2 bench measurements 2026-07-06 (sysid/bench_measurements.yaml):
+
+  # --- A2 bench measurements 2026-07-06 (sysid/bench_measurements.yaml) ---
   subMass: 9.98            # MEASURED 22 lb as-diving (sim default was 4.0!)
-  # volume derived: mass + the June-observed ~+1 N positive trim
-  # ((m*g+1)/(rho*g)); replace with the S1/S3 fitted buoyancy.
+  # volume: SURFACE value, mass + the ~+1 N just-submerged positive trim
+  # ((m*g+1)/(rho*g)). Water 1 confirmed the +1 N prior indirectly: hover
+  # trim -22% cmd ~= 1.45 N pair thrust vs ~1 N buoyancy + margin.
   subVolume: 0.010078
-  # box-model inertias from measured mass + envelope (PRIORS pending S2 fits):
-  subInertia_Z: 0.434
-  subInertia_Y: 0.366
-  subInertia_X: 0.280
-  # NOTHING ELSE FITTED YET. The passive-pitch/roll-righting params
-  # (pitchRightingMoment, rollRightingMoment, surgePitchCoupling,
-  # surgePitchVelCoupling) run on NOMINAL PRIORS in config.py until the
-  # S2 tilt-release and S5 surge-step fits land. Schema example:
-  #   pitchRightingMoment: 0.42   # fit/s2_pitch_fit.py on runs/<id>, resid 0.03
+  # F13 (2026-07-07 water 1, S3/S7): buoyancy FALLS with depth — the sub sat
+  # on the pool floor at ~2 m with ZERO thrust (fail-safe-to-surface DOES NOT
+  # HOLD below ~1.5-2 m). Free-sink/rise at ~1.9 m was ~±0.01 m/s => B(1.9)~0
+  # => slope ~= 1.0 N / 1.9 m. ~0.5-0.7 L compressible volume (trapped air /
+  # enclosure flex). Fit degeneracy note: S3 descent window alone wanted a
+  # steeper slope; 0.53 is pinned by the clean free-sink observation.
+  buoyancyDepthSlope: 0.53
+
+  # --- Inertias ---
+  subInertia_Z: 0.434      # box-model prior (kept: S4 steady+decay jointly
+                           # consistent with it; only c2/Iz is identified)
+  subInertia_Y: 0.73       # box prior 0.366 x 2.0 added-mass factor (assumed
+                           # same factor as measured roll; no pitch actuator
+                           # to identify it directly)
+  subInertia_X: 0.58       # MEASURED effective (added mass included): S7
+                           # known-torque vertical pulses, tau/omega_dot,
+                           # median of +-40% pulses (0.51-0.96 spread)
+
+  # --- Thrust (LINEAR-model equivalents; real curve is quadratic!) ---
+  # S3 heave staircase fit (rms 4.7 mm): per-MOTOR thrust 0.77 / 1.46 / 2.29 N
+  # at 20/30/40% cmd => T(cmd) ~= 0.0015*cmd^2 N (deadband <10%, cmd in %).
+  # T(100%) extrapolates to ~15 N/motor — LONG extrapolation, unverified.
+  # The sim is linear (force = cmd * thrusterMaxForce), so 5.3 N matches the
+  # real curve in the 30-40% operating band: OVER-strong below ~25% cmd,
+  # UNDER-strong above ~50%. Epsilon-plant mode (real quadratic curves) is
+  # the fix; until then don't trust sim behavior at cmd extremes.
+  thrusterMaxForce: 5.3
+  # S4 yaw staircase: steady tau(40%) = 1.28 N*m (from decay-fitted drag) =>
+  # with T_max 5.3 linear: arm = 1.28/(4*0.4*5.3). Effective arm also implies
+  # corner thrust-line ~55-63 deg from surge OR weaker corner props — S5/S6
+  # disambiguate. (Bench hypotheses were 0.063 toed / 0.261 pinwheel.)
+  yawMomentArm: 0.151
+  # A2 tape measure: half the 14.5 in vertical-pair spacing (sim previously
+  # used submarineWidth/2 = 0.23 -> ~25% optimistic roll authority).
+  rollMomentArm: 0.184
+
+  # --- Drag (quadratic, N/(m/s)^2 or N*m/(rad/s)^2) ---
+  heaveDragCoeff: 84.0     # S3 ODE fit (kb-insensitive 80-89; sim had 8!)
+  # S4 spin-down decay: c2/Iz = 0.811 => c2 = 0.352 with Iz prior. Set 0.40
+  # to absorb the small linear term (c1=0.083 N*m*s) at operating rates so
+  # sim omega_ss(40%) == measured 102 deg/s. Sim had 3.0 (8x overdamped —
+  # sim yaw was far too sluggish).
+  angularDragCoeff_Z: 0.40
+  # Roll: S7 submerged post-pulse decays C=c/Ix ~= 1.13 1/s (linear) =>
+  # c_lin ~= 0.66; quadratic equivalent at the 1-3 rad/s band ~= 0.5.
+  # zeta ~= 0.19 at omega_n ~= 3 rad/s — the real sub rings.
+  angularDragCoeff_X: 0.5
+  angularDragCoeff_Y: 0.5  # assumed = roll (no pitch actuator to probe)
+
+  # --- Righting moments (N*m/rad, small-angle; torque = k*sin(theta)) ---
+  # SUBMERGED small-angle righting from S7 post-pulse roll decays (free
+  # water, depths 0.2-1.65 m, fit rms 0.02-0.23 deg): K = k/Ix_eff = 5.6-12.8
+  # 1/s^2, median ~8 => k = 8 x 0.58 = 4.6. Equivalent BG separation 4.7 cm
+  # (pendulum: k = m*g*BG) — SAME k applies to pitch for a submerged body,
+  # so both axes get 4.6. The S2 SURFACE tilt releases are waterplane +
+  # trapped-water contaminated (K scatter x17, equilibrium shifted -12 deg
+  # rep-to-rep) — recorded in the report, NOT used quantitatively.
+  # STYLE-ROLL consequence (real curve, not sim): direct 90 deg needs
+  # ~5.2 N*m; available differential at 80% cmd = 3.5 N*m (stalls ~50 deg),
+  # at 100% = 5.5 N*m (marginal + F12 brownout risk). Resonant pump at
+  # ~0.45-0.5 Hz (omega_n 3 rad/s, zeta 0.19, gain ~2.6x) clears 90 deg at
+  # 80% power => W6 builds the pump; S9 water 2 confirms.
+  rollRightingMoment: 4.6
+  pitchRightingMoment: 4.6
+  # surgePitchCoupling / surgePitchVelCoupling / surgeDragCoeff /
+  # swayDragCoeff: still NOMINAL — S5/S6 (water session 2) fit these.
 
 sensors:
   # --- simulator_node emulation parameter defaults ---
@@ -44,9 +108,13 @@ sensors:
   imu_gyro_zero_prob: 0.012   # corrupt-read rate: whole gyro group zeroed
   imu_accel_zero_prob: 0.081  # corrupt-read rate: whole accel group zeroed
 
-  # ESP32 depth chain: bench stream measurements 2026-07-06 (runs
-  # 20260706-054048-esp32_chain_check-hand + driver soak). REFIT AFTER S3
-  # (in-water outlier statistics + noise under motion).
+  # ESP32 depth chain — IN-WATER VALIDATED 2026-07-07 (S3+S7 live windows):
+  # 7.14 Hz steady, max gap 0.15 s, ZERO gaps >0.5 s, raw-vs-fused residual
+  # p50 4-6 mm / p99 39-55 mm, zero >10 cm outliers. Bench numbers kept.
+  # WATCH (F14): air<->water transitions carry a ~0.2-0.25 m temperature
+  # transient settling over ~20-30 s (seen as -0.24 m in air post-run).
+  # Mitigation: float the sub in the water BEFORE launching the stack so the
+  # surface baseline captures wet at water temperature.
   esp32_update_hz: 7.2        # measured effective JSON stream rate
   esp32_noise_std: 0.008      # m — raw depth band ±~2 cm in air
   esp32_gap_prob: 0.002       # per update: driver filter rejecting an outlier

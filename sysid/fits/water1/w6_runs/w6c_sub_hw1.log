@@ -1,0 +1,3 @@
+INFO: control params loaded from /home/robosub/robosub_ws/build/robosub/config/pid_params.yaml
+[config] calibration applied from /home/robosub/robosub_ws/sysid/sim_calibration.yaml: ['cameraFov', 'subMass', 'subVolume', 'buoyancyDepthSlope', 'subInertia_Z', 'subInertia_Y', 'subInertia_X', 'thrusterMaxForce', 'yawMomentArm', 'rollMomentArm', 'heaveDragCoeff', 'angularDragCoeff_Z', 'angularDragCoeff_X', 'angularDragCoeff_Y', 'rollRightingMoment', 'pitchRightingMoment']
+[config] epsilonPlant=True (env)

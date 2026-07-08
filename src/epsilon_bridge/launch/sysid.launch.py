@@ -59,6 +59,9 @@ def generate_launch_description():
         DeclareLaunchArgument('jpeg_hz', default_value='4.0'),
         DeclareLaunchArgument('gray_world', default_value='false'),
         DeclareLaunchArgument('world_z_sign', default_value='1.0'),
+        # in-node arming countdown (s). LIVE runs pass this so the runner
+        # self-arms after the countdown with no post-submersion CLI/network.
+        DeclareLaunchArgument('countdown_s', default_value='0.0'),
     ]
 
     imu = Node(package='epsilon_sensors', executable='imu', name='imu',
@@ -97,7 +100,8 @@ def generate_launch_description():
 
     runner = Node(package='epsilon_bridge', executable='sysid_runner',
                   name='sysid_runner', output='screen',
-                  parameters=[{'sequence_file': _s('sequence_file')}],
+                  parameters=[{'sequence_file': _s('sequence_file'),
+                               'countdown_s': _f('countdown_s')}],
                   condition=IfCondition(LaunchConfiguration('with_runner')))
 
     omni = Node(package='epsilon_control', executable='omni_control',

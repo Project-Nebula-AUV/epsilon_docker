@@ -1,6 +1,13 @@
 # Control gains for MotionController (robosub/sub/control.py).
 # Units are SI throughout: angles rad, rates rad/s, depth m.
 # robosub is symlink-installed: edit here + restart the node, no rebuild.
+#
+# RE-TUNED 2026-07-07 (W6) against the water-1-calibrated sim in
+# epsilon-plant mode (quadratic thrust T=0.0015*cmd^2 N/motor, heave drag
+# 84, buoyancy +1 N surface fading to 0 at ~1.8 m). The old values were
+# tuned for 0.8 N linear thrusters and stalled the depth loop 0.13 m from
+# target (M-series 2026-07-07). These are sim-tuned; water 2 does the
+# closed-loop hardware check.
 
 # --- Heading cascade ---
 yaw_p: 1.6            # heading error (rad) -> desired yaw rate (rad/s)
@@ -15,16 +22,24 @@ pixel_sway_d: 2.6     # filtered pixel-rate (1/s) -> sway damping
 pixel_rate_alpha: 0.3 # LPF for the pixel-rate estimate
 
 # --- Vertical ---
-depth_p: 2.5
-depth_i: 0.12
-depth_i_clamp: 1.2
+depth_p: 3.0
+depth_i: 0.15
+depth_i_clamp: 2.0    # integrator must carry the depth-varying buoyancy
+                      # residual (F13: B falls ~0.53 N/m of depth) — the old
+                      # 1.2 clamp * 0.12 gain couldn't cancel the ff error
 depth_d: 2.0          # fused vertical velocity (m/s)
-buoyancy_ff: 0.61     # steady heave canceling net buoyancy (+0.98 N / 1.6 N)
+buoyancy_ff: 0.12     # steady heave vs net buoyancy at ~1 m depth. Under the
+                      # QUADRATIC plant 0.12 ~= 0.43 N pair. Hardware analog:
+                      # the -22% bench trim (1.45 N pair) suits the SURFACE;
+                      # at depth the integrator trims down (F13 slope).
+                      # Old value 0.61 was ~1 N under 0.8 N linear thrusters
+                      # but 6.5 N under the calibrated plant -> depth stall.
 
 # --- Roll ---
 roll_p: 2.3           # roll error (rad)
 roll_d: 2.0           # gyro_x (rad/s)
 
-# --- Vision thresholds ---
+# --- Vision thresholds (contour area, SIM-REFERENCE 320x240 pixels;
+#     Vision.update scales by actual image area — hardware 640x320 = 2.67x) ---
 min_pixels_for_detection: 20
 min_gate_pixels: 50
