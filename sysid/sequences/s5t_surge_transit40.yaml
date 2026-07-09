@@ -1,0 +1,10 @@
+# S5t at 40% — same protocol as s5t_surge_transit25 (faster: ~0.4-0.8 m/s,
+# needs ~6 m of clear runway + catcher). Second power level cross-checks the
+# thrust curve: both reps must yield the SAME drag coefficient.
+name: s5t_surge_transit40
+mode: wrench
+max_abs: 55.0
+steps:
+  - {dur: 2.0, wrench: [0, 0, 0, 0, 0], label: baseline}
+  - {dur: 8.0, wrench: [0.40, 0, 0, 0, 0], label: surge40-transit}
+  - {dur: 4.0, wrench: [0, 0, 0, 0, 0], label: coast}

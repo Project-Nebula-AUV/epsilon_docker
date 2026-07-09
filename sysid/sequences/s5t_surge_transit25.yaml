@@ -1,0 +1,15 @@
+# S5t — SURGE TRANSIT at 25%: measures terminal velocity over marked distance
+# (replaces the IMU-based S5 drag fit — accel signal was under the pitch-
+# gravity leak). USER PROTOCOL: two marks a tape-measured 3.0 m apart along
+# the pool edge, past the first ~2.5 m of travel (spin-up). Aim the sub
+# straight down the lane just below the surface, run, FILM both mark
+# crossings from ONE fixed position (or stopwatch nose-crossings).
+# v_term = distance / time  ->  surgeDragCoeff = F(25%)/v^2. Catcher at the
+# far wall. If the path curves >~30 deg, re-aim and repeat the rep.
+name: s5t_surge_transit25
+mode: wrench
+max_abs: 40.0
+steps:
+  - {dur: 2.0, wrench: [0, 0, 0, 0, 0], label: baseline}
+  - {dur: 10.0, wrench: [0.25, 0, 0, 0, 0], label: surge25-transit}
+  - {dur: 4.0, wrench: [0, 0, 0, 0, 0], label: coast}

@@ -1,0 +1,11 @@
+# S6t — SWAY TRANSIT (OPTIONAL/experimental): broadside v_term over ~1.5-2 m
+# marks. Slow (~0.2 m/s: expect ~8-10 s between marks). KNOWN RISK: the sub
+# rotated 174 deg during S6 — if it visibly starts to spin, ABORT the rep;
+# we keep the soft fit instead. Surge transits are the priority.
+name: s6t_sway_transit
+mode: wrench
+max_abs: 70.0
+steps:
+  - {dur: 2.0, wrench: [0, 0, 0, 0, 0], label: baseline}
+  - {dur: 12.0, wrench: [0, 0.65, 0, 0, 0], label: sway65-transit}
+  - {dur: 4.0, wrench: [0, 0, 0, 0, 0], label: coast}
