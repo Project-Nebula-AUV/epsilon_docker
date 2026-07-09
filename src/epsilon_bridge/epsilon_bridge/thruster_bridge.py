@@ -39,6 +39,13 @@ class ThrusterBridge(Node):
         # increase toward ~+0.5 in-water to hold against positive buoyancy.
         self.heave_bias = float(self.declare_parameter('heave_bias', 0.0).value)
         self.armed = bool(self.declare_parameter('start_armed', False).value)
+        # SOFT-START slew limit (%% per second, per thruster). Commands RAMP to
+        # target instead of stepping -> limits the current inrush that sagged
+        # the 5V rail and browned-out the Pi (2026-07-09: instant-100%% -> crash).
+        # 150 %%/s = 0->full in ~0.67 s. Disarm/watchdog still zero INSTANTLY.
+        self.slew_rate = float(self.declare_parameter('slew_rate', 150.0).value)
+        self._last_out = [0.0] * 6
+        self._last_out_t = None
         alloc_path = str(self.declare_parameter('allocation_file', '').value)
 
         self.A = self._load_allocation(alloc_path)  # A[t][axis], 6 x 5
@@ -68,6 +75,8 @@ class ThrusterBridge(Node):
 
     def _zero(self):
         self.pub.publish(Float64MultiArray(data=[0.0] * 6))
+        self._last_out = [0.0] * 6          # so the next ramp starts from rest
+        self._last_out_t = None
 
     def on_cmd(self, msg):
         d = list(msg.data)
@@ -88,11 +97,29 @@ class ThrusterBridge(Node):
         for t in range(6):
             v = sum(self.A[t][a] * wrench[a] for a in range(5)) * 100.0
             out.append(max(-100.0, min(100.0, v)))
-        self.last_input_t = self.get_clock().now()
+        now = self.get_clock().now()
+        self.last_input_t = now
         if not self.armed:
             self._zero()
             return
-        self.pub.publish(Float64MultiArray(data=out))
+        # Soft-start: ramp each thruster toward its target, capped at slew_rate.
+        if self._last_out_t is None:
+            dt = 0.02
+        else:
+            dt = (now - self._last_out_t).nanoseconds * 1e-9
+            dt = min(max(dt, 1e-3), 0.2)     # guard against big/backward gaps
+        max_step = self.slew_rate * dt        # %% of full per tick
+        ramped = []
+        for t in range(6):
+            delta = out[t] - self._last_out[t]
+            if delta > max_step:
+                delta = max_step
+            elif delta < -max_step:
+                delta = -max_step
+            ramped.append(self._last_out[t] + delta)
+        self._last_out = ramped
+        self._last_out_t = now
+        self.pub.publish(Float64MultiArray(data=ramped))
 
     def on_watchdog(self):
         if self.last_input_t is None:
