@@ -20,9 +20,14 @@ class StabilizeTask(Task):
 
     def __init__(self, duration: float = 3.0,
                  speed_threshold: float = 0.05,   # accepted for compatibility
-                 target_depth: float = 1.0):
+                 target_depth: float = 1.0,
+                 settle_grace: float = 30.0):
         self.target_depth = target_depth
         self.duration = duration
+        # Complete after duration+settle_grace EVEN IF not settled, so a run
+        # can never hang holding forever (2026-07-09: an unstable roll kept
+        # is_settled false -> the holdtest ran the full 420 s cap).
+        self.settle_grace = settle_grace
         self._timer = 0.0
         self._heading = None
         super().__init__()
@@ -44,7 +49,12 @@ class StabilizeTask(Task):
             self._heading = sensors.heading
         self._timer += dt
         cmds = sub.ctrl.hold(sensors, dt, self.target_depth, self._heading)
-        if (self._timer >= self.duration
-                and sub.ctrl.is_settled(sensors, self.target_depth)):
-            return TaskStatus.COMPLETED, cmds
+        if self._timer >= self.duration:
+            if sub.ctrl.is_settled(sensors, self.target_depth):
+                return TaskStatus.COMPLETED, cmds
+            if self._timer >= self.duration + self.settle_grace:
+                print("WARN: StabilizeTask completing UNSETTLED after "
+                      "%.0f+%.0f s (roll/depth never quieted)"
+                      % (self.duration, self.settle_grace))
+                return TaskStatus.COMPLETED, cmds
         return TaskStatus.RUNNING, cmds

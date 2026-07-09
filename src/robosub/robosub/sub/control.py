@@ -56,8 +56,16 @@ _DEFAULTS = {
     'depth_d':        2.0,    # fused vertical velocity (m/s)
     'buoyancy_ff':    0.61,   # steady heave that cancels net buoyancy
     # --- roll ---
-    'roll_p':         2.3,    # roll error (rad) -> roll command
-    'roll_d':         2.0,    # gyro_x (rad/s)
+    'roll_p':         0.6,    # roll error (rad) -> cmd. WATER 1st test
+                             # (2026-07-09): 2.3 saturated 97%% of the time ->
+                             # bang-bang full diff (>righting) -> +-87 deg limit
+                             # cycle, near-tip. Gentle P + rely on natural righting.
+    'roll_d':         3.0,    # gyro_x (rad/s) -- more damping (sub is
+                             # very underdamped, zeta~0.19); on the ACCURATE raw
+                             # gyro, not the lagged attitude, so it is safe.
+    'roll_authority_max': 0.4,  # HARD cap on roll cmd: 0.4*full ~= 2.2 N*m <
+                             # 3.3 N*m righting, so control can never out-torque
+                             # the hull and flip it (the water-1 near-tip mode).
     # --- vision thresholds (consumed by Submarine, kept in one file) ---
     'min_pixels_for_detection': 20,
     'min_gate_pixels': 50,
@@ -148,8 +156,9 @@ class MotionController:
 
     def _roll_level(self, sensors: SensorSuite, target_deg: float = 0.0) -> float:
         err = math.radians(angle_diff(target_deg, sensors.roll))
+        cap = self.p.get('roll_authority_max', 1.0)
         return float(np.clip(err * self.p['roll_p']
-                             - sensors.imu.gyro_x * self.p['roll_d'], -1.0, 1.0))
+                             - sensors.imu.gyro_x * self.p['roll_d'], -cap, cap))
 
     # ------------------------------------------------------------------
     # Public command builders (each returns complete ThrusterCommands)
