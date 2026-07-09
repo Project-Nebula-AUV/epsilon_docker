@@ -55,8 +55,16 @@ READY_TIMEOUT="${READY_TIMEOUT:-45}"        # seconds to wait for the stack to b
 GW_ARG=$([ "$GRAY_WORLD" = "1" ] && echo true || echo false)
 
 WS=/home/robosub/robosub_ws
+# ROS setup.bash references unbound vars (AMENT_TRACE_SETUP_FILES) and unsets
+# them again on exit, so under `set -u` sourcing it CRASHES the script before
+# it launches anything -- but only in a NON-INTERACTIVE shell (docker exec
+# bash -lc, detached, tmux), where ROS was not pre-sourced. That is exactly
+# how these get launched to survive SSH loss. Guard the source (2026-07-09:
+# this silent early-exit = "motors never spun" all session).
+set +u
 source /opt/ros/humble/setup.bash
 source "${WS}/install/setup.bash"
+set -u
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 0. CLEAN SLATE — kill any stale stack so launch hits free devices.

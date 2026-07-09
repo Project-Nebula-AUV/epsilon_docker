@@ -43,10 +43,27 @@ class ArmingHelper(Node):
     def _publish(self, s):
         msg = String()
         msg.data = s
-        for _ in range(3):        # RELIABLE, but spin to flush to late-joining subs
+        # WAIT for submarine_node's /sim/control subscription to be discovered
+        # before publishing. arming_helper is a short-lived node; on the Pi's
+        # slow DDS discovery the old fixed 0.3 s window published 'start' into
+        # the void -> the mission stayed in WAITING, issued zero thruster
+        # commands, watchdog held the motors at zero (2026-07-09: "motors not
+        # spinning" on the bench). Volatile QoS both ends, so latching is out.
+        waited = 0.0
+        while self.ctrl.get_subscription_count() < 1 and waited < 12.0:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            waited += 0.1
+        n = self.ctrl.get_subscription_count()
+        for _ in range(5):        # RELIABLE + spin to flush to matched subs
             self.ctrl.publish(msg)
             rclpy.spin_once(self, timeout_sec=0.1)
-        self.get_logger().info("/sim/control <- '%s'" % s)
+        if n < 1:
+            self.get_logger().warn(
+                "/sim/control '%s' published but NO subscriber discovered "
+                "in %.1fs (mission may not start!)" % (s, waited))
+        else:
+            self.get_logger().info(
+                "/sim/control <- '%s' (subs=%d, waited %.1fs)" % (s, n, waited))
 
     def _arm(self, val):
         # 15 s: fresh-node service discovery on the Pi is routinely >3 s

@@ -33,7 +33,7 @@ export ROBOSUB_STYLE_ROLL="$STYLE_ROLL"
 
 log() { echo "[supervisor $(date +%H:%M:%S)] $*"; }
 
-STACK_PID=""; LOGGER_PID=""; FINISHED=0
+STACK_PID=""; LOGGER_PID=""; STATUS_PID=""; FINISHED=0
 cleanup() {
   [ "$FINISHED" = "1" ] && return
   FINISHED=1
@@ -41,6 +41,7 @@ cleanup() {
   timeout 20 ros2 run epsilon_bridge arming_helper disarm >/dev/null 2>&1 \
     || timeout 10 ros2 service call /thruster_bridge/arm std_srvs/srv/SetBool "{data: false}" >/dev/null 2>&1 \
     || true
+  [ -n "$STATUS_PID" ] && kill -TERM -- -"$STATUS_PID" 2>/dev/null || true
   [ -n "$STACK_PID" ] && kill -TERM -- -"$STACK_PID" 2>/dev/null || true
   sleep 2
   [ -n "$LOGGER_PID" ] && kill -INT "$LOGGER_PID" 2>/dev/null || true
@@ -73,25 +74,34 @@ ros2 run epsilon_bridge sysid_logger --ros-args -p run_dir:="${RUN_DIR}" \
     > "${RUN_DIR}/logger.out" 2>&1 &
 LOGGER_PID=$!
 
-have_topic()   { timeout -k 2 "${2:-5}" ros2 topic echo --once --qos-reliability best_effort "$1" >/dev/null 2>&1; }
-have_service() { timeout -k 2 "${2:-5}" ros2 service type "$1" >/dev/null 2>&1; }
-REQUIRED=(
-  "/camera/image_raw:camera frames"
-  "/imu:IMU"
-  "/sensors/heading:sensor_bridge heading"
-  "/sensors/depth:depth (fused or synthetic)"
-  "/sub/status:nav brain alive"
-)
+# Readiness = ACTUAL DATA FLOW + node liveness, NOT `ros2 topic echo` probes.
+# Those short-lived CLI probes are unreliable at DDS discovery on this Pi and
+# failed even when the stack was fully healthy (2026-07-09: the logger, a real
+# persistent node, captured 83 IMU rows while every CLI probe reported the
+# topic missing). The logger IS the honest sensor witness — if its CSVs and
+# frame dir are growing, the sensors + camera are genuinely live, discovery or
+# not. Node liveness (nav + arm target) comes from pgrep. All discovery-free.
+rows() { [ -f "$1" ] && wc -l < "$1" 2>/dev/null || echo 0; }
+frames_n() { ls "${RUN_DIR}/frames" 2>/dev/null | wc -l; }
+node_up() { pgrep -f "$1" >/dev/null 2>&1; }
 
-log "waiting up to ${READY_TIMEOUT}s for a healthy stack..."
+log "waiting up to ${READY_TIMEOUT}s for a healthy stack (data-flow gate)..."
 ready=0; SECONDS=0
+imu0=$(rows "${RUN_DIR}/imu.csv"); att0=$(rows "${RUN_DIR}/attitude.csv")
+dep0=$(rows "${RUN_DIR}/depth_raw.csv"); frm0=$(frames_n)
 while [ "$SECONDS" -lt "$READY_TIMEOUT" ]; do
+  sleep 3
   missing=""
-  for item in "${REQUIRED[@]}"; do
-    topic="${item%%:*}"; label="${item#*:}"
-    have_topic "$topic" 4 || missing="${missing}  - ${label} (${topic})\n"
-  done
-  have_service /thruster_bridge/arm 5 || missing="${missing}  - arm service (/thruster_bridge/arm)\n"
+  [ "$(rows "${RUN_DIR}/imu.csv")"      -gt "$imu0" ] || missing="${missing}  - IMU data not flowing (imu.csv)\n"
+  [ "$(rows "${RUN_DIR}/attitude.csv")" -gt "$att0" ] || missing="${missing}  - heading/roll not flowing (attitude.csv)\n"
+  [ "$(frames_n)"                       -gt "$frm0" ] || missing="${missing}  - camera frames not flowing (frames/)\n"
+  # depth: real chain grows depth_raw.csv; synthetic-depth mode won't, so only
+  # require it when using the real sensor.
+  if [ "${SYNTHETIC_DEPTH}" = "-1.0" ]; then
+    [ "$(rows "${RUN_DIR}/depth_raw.csv")" -gt "$dep0" ] || missing="${missing}  - depth not flowing (depth_raw.csv)\n"
+  fi
+  node_up "[s]ubmarine_node"            || missing="${missing}  - nav brain not running (submarine_node)\n"
+  node_up "epsilon_bridge/[t]hruster_bridge" || missing="${missing}  - thruster_bridge (arm target) not running\n"
   [ -z "$missing" ] && { ready=1; break; }
   kill -0 "$STACK_PID" 2>/dev/null || { log "launch died."; break; }
 done
@@ -100,7 +110,15 @@ if [ "$ready" -ne 1 ]; then
   echo -e "$missing"
   exit 1
 fi
-log "stack healthy."
+log "stack healthy (sensors flowing + nav/thruster nodes up)."
+
+# Persistent /sub/status subscriber -> file, for discovery-free completion
+# detection (a long-lived subscriber discovers reliably where the short-lived
+# `echo --once` probe does not). The monitor greps this file, never the bus.
+STATUS_FILE="${RUN_DIR}/status.stream"
+setsid ros2 topic echo --qos-reliability best_effort /sub/status \
+    > "$STATUS_FILE" 2>/dev/null < /dev/null &
+STATUS_PID=$!
 
 if [ "$NO_ARM" = "1" ]; then
   log "NO_ARM=1: bench mode — mission runs DISARMED for ${RUN_MAX}s max."
@@ -131,12 +149,12 @@ fi
 SECONDS=0
 while [ "$SECONDS" -lt "$RUN_MAX" ]; do
   kill -0 "$STACK_PID" 2>/dev/null || { log "stack exited."; break; }
-  st=$(timeout -k 2 4 ros2 topic echo --once --qos-reliability best_effort \
-        /sub/status 2>/dev/null | grep -m1 "data:" || true)
-  case "$st" in
-    *MISSION_COMPLETE*) log "MISSION_COMPLETE (t=${SECONDS}s)"; break ;;
-    *MISSION_FAILED*)   log "MISSION_FAILED (t=${SECONDS}s)";   break ;;
-  esac
+  if grep -q "MISSION_COMPLETE" "$STATUS_FILE" 2>/dev/null; then
+    log "MISSION_COMPLETE (t=${SECONDS}s)"; break
+  fi
+  if grep -q "MISSION_FAILED" "$STATUS_FILE" 2>/dev/null; then
+    log "MISSION_FAILED (t=${SECONDS}s)"; break
+  fi
   sleep 3
 done
 [ "$SECONDS" -ge "$RUN_MAX" ] && log "RUN_MAX ${RUN_MAX}s reached — forcing teardown."
