@@ -1,5 +1,24 @@
 # SYSID RESUME — canonical state. Update BEFORE ending every session.
 
+2026-07-09 (later) — **PHASE 0 BENCH PREP FOR THE COURSE ARC DONE** (plan:
+2 water sessions to full-course auton; laptop plan file curried-wibbling-
+toucan). READ **sysid/SESSION1_RUNBOOK.md** for the next water session
+(S10 reshoot + holdtest/rolltest/gatetest checkout, in that order).
+- One-command water tests: .devcontainer/holdtest.sh / rolltest.sh /
+  gatetest.sh (watertest.sh core: motortest bring-up + sysid logger every
+  run + NO_ARM=1 bench mode). Missions holdtest/rolltest in mission.py.
+- Depth hold re-verified in sim under water-2 cal: 1.501 m +-2.1 cm steady
+  (no PID retune needed). rolltest rolls AT DEPTH (StyleRollSubtask grew an
+  explicit target_depth — it was rolling at the surface when the pre-dive
+  had not finished; fixed + a leaked-global-replace crash fixed, see git).
+- SCALED COURSE rehearsal works: ROBOSUB_GATE_X/SLALOM_START/SLALOM_STEP
+  (sim world), ROBOSUB_WORLD_DEPTH, ROBOSUB_GATE_CLEAR_S (post-gate blind
+  clearance = the one true course-scale distance in the tasks). Backyard
+  scale (4 m gate, +2.5 m slalom, 2 m step, 2.1 m deep) MISSION_COMPLETE
+  138.5 s; full-scale regression 161.3 s w/ 720 roll.
+- surge/sway drag now flat-plate ESTIMATES 25/55 (nominal 1.5/8 let the sim
+  coast >5 m = broke rehearsal; S5/S6 unfittable) — refine from course video.
+
 2026-07-09 — **WATER SESSION 2 ANALYZED + CALIBRATION LANDED (backups
 .pre-w2cal.20260709; run metas annotated .pre-w2meta*).** Runs: S5 surge,
 S6 sway (ESP32 depth DEAD whole run — header-only CSVs; est ~0.9 m), S8 trim
