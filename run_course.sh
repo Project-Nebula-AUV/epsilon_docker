@@ -35,6 +35,8 @@ case "$MODE" in
   slalom) export ROBOSUB_MISSION=slalom; export ROBOSUB_STYLE_ROLL=0 ;;
   orbit)  export ROBOSUB_MISSION=orbit; export ROBOSUB_STYLE_ROLL="${STYLE_ROLL:-0}" ;;
   hold)   export ROBOSUB_MISSION=hold; export ROBOSUB_STYLE_ROLL=0 ;;
+  holdtest) export ROBOSUB_MISSION=holdtest; export ROBOSUB_STYLE_ROLL=0 ;;
+  rolltest) export ROBOSUB_MISSION=rolltest; export ROBOSUB_STYLE_ROLL=0 ;;
   *) echo "unknown mode: $MODE"; exit 1 ;;
 esac
 

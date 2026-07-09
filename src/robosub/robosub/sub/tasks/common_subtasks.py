@@ -337,7 +337,10 @@ class CenterOnGateHalf(Subtask):
         self._last_err_sign = 0.0
 
     def on_enter(self, sub, sensors, vision, context):
-        self.target_depth = context.get('target_depth', sensors.depth)
+        if self._depth_override is not None:
+            self.target_depth = self._depth_override
+        else:
+            self.target_depth = context.get('target_depth', sensors.depth)
         self._axis = context.get('axis', sensors.heading)
         self._ok = 0
         self._blind = 0.0
@@ -442,7 +445,10 @@ class DriveThroughGate(Subtask):
         self._lost_t: Optional[float] = None
 
     def on_enter(self, sub, sensors, vision, context):
-        self.target_depth = context.get('target_depth', sensors.depth)
+        if self._depth_override is not None:
+            self.target_depth = self._depth_override
+        else:
+            self.target_depth = context.get('target_depth', sensors.depth)
         self._axis = context.get('axis', sensors.heading)
         self._seen = False
         self._lost_t = None
@@ -513,9 +519,10 @@ class StyleRollSubtask(Subtask):
 
     def __init__(self, degrees: float = 720.0, roll_power: float = 1.00,
                  settle_deg: float = 2.5, settle_rate: float = 0.08,
-                 timeout: float = 90.0):
+                 timeout: float = 90.0, target_depth: Optional[float] = None):
         super().__init__()
         self.degrees = degrees
+        self._depth_override = target_depth  # None = context/current depth
         self.roll_power = roll_power   # 1.00 since water-2 S9: two 2.5 s
         # 100% roll couples ran with NO brownout, and the +100% pulse did a
         # REAL 360 (gyro-integrated). 100% completes the roll in ~2.5-3.5 s.
@@ -529,7 +536,10 @@ class StyleRollSubtask(Subtask):
         self._carry_dir = 0.0   # 0 = still pumping; +/-1 = committed
 
     def on_enter(self, sub, sensors, vision, context):
-        self.target_depth = context.get('target_depth', sensors.depth)
+        if self._depth_override is not None:
+            self.target_depth = self._depth_override
+        else:
+            self.target_depth = context.get('target_depth', sensors.depth)
         self._axis = context.get('axis', sensors.heading)
         self.accum = 0.0
         self.spinning = True
@@ -634,7 +644,10 @@ class DriveUntilTargetLost(Subtask):
         self._seen = False
 
     def on_enter(self, sub, sensors, vision, context):
-        self.target_depth = context.get('target_depth', sensors.depth)
+        if self._depth_override is not None:
+            self.target_depth = self._depth_override
+        else:
+            self.target_depth = context.get('target_depth', sensors.depth)
         self._axis = context.get('axis', sensors.heading)
         self._seen = False
 
@@ -672,7 +685,10 @@ class SwayUntilTargetLost(Subtask):
         self._axis: Optional[float] = None
 
     def on_enter(self, sub, sensors, vision, context):
-        self.target_depth = context.get('target_depth', sensors.depth)
+        if self._depth_override is not None:
+            self.target_depth = self._depth_override
+        else:
+            self.target_depth = context.get('target_depth', sensors.depth)
         self._axis = context.get('axis', sensors.heading)
 
     def execute(self, sub, dt, sensors, vision, config, context):

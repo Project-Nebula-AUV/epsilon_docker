@@ -4,6 +4,10 @@ stay untouched.
 
 ROBOSUB_MISSION selects the plan:
   hold    — station-keeping forever (motortest.sh default on the vehicle).
+  holdtest— WATER SESSION 1 checkout: 60 s depth hold at ROBOSUB_TEST_DEPTH
+            (default 1.2 m) -> +90 deg compass turn -> 8 s hold -> surface.
+  rolltest— WATER SESSION 1 checkout: settle -> 360 deg style roll -> 8 s
+            re-hold -> surface. Uses the pump controller (45 s timeout).
   orbit   — legacy pre-qual: gate -> orbit the marker pole -> return gate.
   gate    — outbound gate only (with style roll if enabled). Test mode.
   slalom  — sweep + slalom out + slalom back. Test mode (start facing the
@@ -23,6 +27,8 @@ from robosub.sub.tasks.orbit_turn_task import OrbitTurnTask
 from robosub.sub.tasks.shutdown_task import ShutdownTask
 from robosub.sub.tasks.slalom_task import SlalomTask
 from robosub.sub.tasks.sweep_task import SweepForSlalomTask
+from robosub.sub.tasks.task_base import Task
+from robosub.sub.tasks.common_subtasks import TurnToHeading, StyleRollSubtask
 
 MISSION_DEPTH = float(os.environ.get('ROBOSUB_MISSION_DEPTH', '1.5'))  # m — running depth (pool venue: set 0.8)
 SURFACE_DEPTH = 0.1    # m — end of run
@@ -37,6 +43,32 @@ def create_mission():
 
     if mode == 'hold':
         return [StabilizeTask(duration=1e9, target_depth=MISSION_DEPTH)]
+
+    test_depth = float(os.environ.get('ROBOSUB_TEST_DEPTH', '1.2'))
+
+    if mode == 'holdtest':
+        # Water-1-loop checkout: THE gate for everything else. PASS = depth
+        # within +-10 cm for the 60 s hold + a clean 90 deg turn.
+        return [
+            StabilizeTask(duration=60.0, target_depth=test_depth),
+            Task([TurnToHeading(relative_degrees=90.0)]),
+            StabilizeTask(duration=8.0, target_depth=test_depth),
+            StabilizeTask(duration=2.0, target_depth=SURFACE_DEPTH),
+            ShutdownTask(),
+        ]
+
+    if mode == 'rolltest':
+        # Style-roll controller checkout (physics proven by S9): settle,
+        # one 360, re-level, re-hold, surface. Roll subtask times out
+        # COMPLETED so a failure cannot strand the run.
+        return [
+            StabilizeTask(duration=20.0, target_depth=test_depth),
+            Task([StyleRollSubtask(degrees=360.0, timeout=45.0,
+                                   target_depth=test_depth)]),
+            StabilizeTask(duration=8.0, target_depth=test_depth),
+            StabilizeTask(duration=2.0, target_depth=SURFACE_DEPTH),
+            ShutdownTask(),
+        ]
 
     gate = GateTask(target_depth=GATE_CENTER_DEPTH, side='right',
                     style_roll_degrees=style_roll)
