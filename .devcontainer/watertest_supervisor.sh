@@ -33,7 +33,7 @@ export ROBOSUB_STYLE_ROLL="$STYLE_ROLL"
 
 log() { echo "[supervisor $(date +%H:%M:%S)] $*"; }
 
-STACK_PID=""; LOGGER_PID=""; STATUS_PID=""; FINISHED=0
+STACK_PID=""; LOGGER_PID=""; STATUS_PID=""; NAVCMD_PID=""; FINISHED=0
 cleanup() {
   [ "$FINISHED" = "1" ] && return
   FINISHED=1
@@ -42,6 +42,7 @@ cleanup() {
     || timeout 10 ros2 service call /thruster_bridge/arm std_srvs/srv/SetBool "{data: false}" >/dev/null 2>&1 \
     || true
   [ -n "$STATUS_PID" ] && kill -TERM -- -"$STATUS_PID" 2>/dev/null || true
+  [ -n "$NAVCMD_PID" ] && kill -TERM -- -"$NAVCMD_PID" 2>/dev/null || true
   [ -n "$STACK_PID" ] && kill -TERM -- -"$STACK_PID" 2>/dev/null || true
   sleep 2
   [ -n "$LOGGER_PID" ] && kill -INT "$LOGGER_PID" 2>/dev/null || true
@@ -120,6 +121,15 @@ setsid ros2 topic echo --qos-reliability best_effort /sub/status \
     > "$STATUS_FILE" 2>/dev/null < /dev/null &
 STATUS_PID=$!
 
+# Capture the nav's PRE-gate output too, so we can tell "nav commanded zero"
+# from "thruster_bridge gated it to zero" (2026-07-09: motors dead in water —
+# cmd.csv = /thrust_control POST-gate was all-zero; this is /thruster_commands
+# PRE-gate). Both nonzero+gated-zero => arm/watchdog problem; nav-zero => control.
+NAVCMD_FILE="${RUN_DIR}/navcmd.stream"
+setsid ros2 topic echo /thruster_commands \
+    > "$NAVCMD_FILE" 2>/dev/null < /dev/null &
+NAVCMD_PID=$!
+
 if [ "$NO_ARM" = "1" ]; then
   log "NO_ARM=1: bench mode — mission runs DISARMED for ${RUN_MAX}s max."
 else
@@ -128,30 +138,15 @@ else
     log "  arming in ${i}s..."
     sleep 1
   done
-  armed_ok=0
-  for attempt in 1 2 3; do
-    if timeout 40 ros2 run epsilon_bridge arming_helper arm 2>&1 | grep -q "NOT changed"; then
-      log "arm attempt ${attempt} failed; retrying..."
-      sleep 2
-    else
-      armed_ok=1
-      log ">>> ARMED — mission running (${TEST}) <<<"
-      break
-    fi
-  done
-  if [ "$armed_ok" -ne 1 ]; then
-    log "!!! ARM FAILED 3x — tearing down (vehicle was never armed)."
-    exit 1
-  fi
 fi
 
-# ── CONFIRM the mission actually STARTED (left WAITING) ─────────────────────
-# arming_helper's single-shot 'start' publish is unreliable on this Pi's slow
-# DDS discovery -> the mission often sat in WAITING with zeroed motors even
-# after "ARMED" (2026-07-09 water runs). Re-send 'start' with `pub --once -w 1`
-# (WAITS for the submarine_node subscription to match before publishing =
-# guaranteed delivery, the exact mechanism sysid_run.sh uses) and CONFIRM via
-# /sub/status until the mission leaves WAITING. Closed-loop, discovery-proof.
+# ── STEP 1: CONFIRM the mission STARTED (left WAITING) ──────────────────────
+# Single-shot 'start' is unreliable on this Pi's slow DDS discovery -> the
+# mission sat in WAITING with zeroed motors (2026-07-09). Re-send with
+# `pub --once -w 1` (WAITS for the submarine_node subscription to MATCH before
+# publishing = guaranteed delivery, the mechanism sysid_run.sh uses) and
+# CONFIRM via /sub/status until it leaves WAITING. Do this BEFORE arming so the
+# thruster arms onto an already-commanding mission (armed+WAITING = idle+safe).
 started=0
 for i in $(seq 1 20); do
   last=$(grep -a "data:" "$STATUS_FILE" 2>/dev/null | tail -1)
@@ -160,14 +155,36 @@ for i in $(seq 1 20); do
       timeout 8 ros2 topic pub --once -w 1 /sim/control std_msgs/msg/String \
           "{data: 'start'}" >/dev/null 2>&1
       sleep 1 ;;
-    *)
-      started=1
-      log "mission STARTED: ${last#*data: }"
-      break ;;
+    *) started=1; log "mission STARTED: ${last#*data: }"; break ;;
   esac
 done
-if [ "$started" -ne 1 ]; then
-  log "!!! mission never left WAITING after 20 tries — start not delivered."
+[ "$started" -ne 1 ] && log "!!! mission never left WAITING after 20 tries."
+
+# ── STEP 2: ARM the thruster — and CONFIRM it (only when not NO_ARM) ─────────
+# The OLD path called `arming_helper arm` and only checked for the string
+# "NOT changed" — but the arm SERVICE CALL can time out (3 s) and print
+# "call failed" instead, so the supervisor logged "ARMED" while the bridge
+# stayed DISARMED -> thruster_bridge line 92 forced ALL output to zero =
+# motors dead despite a running mission (2026-07-09 THE water-run bug).
+# Now: call the service DIRECTLY, parse the response, retry until it truly
+# reports armed. `success=True`/`message=armed` is the ground truth.
+if [ "$NO_ARM" != "1" ]; then
+  armed_ok=0
+  for attempt in $(seq 1 6); do
+    resp=$(timeout 15 ros2 service call /thruster_bridge/arm std_srvs/srv/SetBool \
+             "{data: true}" 2>&1)
+    if echo "$resp" | grep -qiE "success=True|message='?armed'?"; then
+      armed_ok=1
+      log ">>> THRUSTER ARMED (confirmed, attempt ${attempt}) — motors live <<<"
+      break
+    fi
+    log "arm attempt ${attempt} not confirmed; retrying..."
+    sleep 2
+  done
+  if [ "$armed_ok" -ne 1 ]; then
+    log "!!! ARM NOT CONFIRMED after 6 tries — tearing down (motors never live)."
+    exit 1
+  fi
 fi
 
 # ── monitor: end on MISSION_COMPLETE/FAILED, dead stack, or RUN_MAX ─────────
