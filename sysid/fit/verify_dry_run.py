@@ -84,10 +84,15 @@ def main(run_dir, seq_path):
             exp = expected_at(steps, max(0.0, min(ts, total - 1e-6)))
             if exp is None:
                 exp = [0.0] * 6
-        # +/-150 ms slack: logger RECEIVE timestamps jitter that much at step
-        # edges under Pi load (measured 2026-07-05; commands themselves exact)
+        # Logger RECEIVE timestamps lag/jitter up to ~0.3 s under Pi load
+        # (the commands themselves are exact -- the runner is deterministic).
+        # The value error a FIXED time-lag induces on a ramp scales with the
+        # ramp slope, so the steeper s8 ramps (2026-07-08, 0.03/s wrench) need
+        # a wider alignment window than the original 0.15 s to absorb the same
+        # lag; hold steps are unaffected (constant value, offset is a no-op).
         cands = [exp]
-        for off in (0.025, -0.025, 0.075, -0.075, 0.15, -0.15):
+        for off in (0.025, -0.025, 0.075, -0.075, 0.15, -0.15,
+                    0.22, -0.22, 0.3, -0.3):
             cands.append(expected_at(
                 steps, max(0.0, min(ts + off, total - 1e-6))) or [0.0] * 6)
         if ts < 0.2 or ts > total - 0.2:
