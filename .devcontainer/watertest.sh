@@ -40,6 +40,13 @@ source /opt/ros/humble/setup.bash
 source "${WS}/install/setup.bash"
 set -u
 
+# WiFi-INDEPENDENT ROS: the whole stack runs on the Pi, so force DDS onto
+# loopback only. Otherwise DDS binds discovery to the WiFi interface and when
+# the sub SUBMERGES (WiFi drops) intra-Pi service discovery STALLS -> the arm
+# service call sits pending and only completes when the sub is recovered and
+# WiFi returns (2026-07-09: "motors spin the moment it reconnects to WiFi").
+export ROS_LOCALHOST_ONLY=1
+
 RUN_ID="$(date +%Y%m%d-%H%M%S)-${TEST}test-water"
 RUN_DIR="${WS}/sysid/runs/${RUN_ID}"
 
