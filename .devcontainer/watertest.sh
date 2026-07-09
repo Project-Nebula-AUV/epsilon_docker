@@ -1,15 +1,13 @@
 #!/bin/bash
 # =============================================================================
-# watertest.sh — WATER SESSION 1 checkout runner (holdtest / rolltest / gate)
+# watertest.sh — WATER SESSION checkout runner (holdtest / rolltest / gatetest)
 #
-# Same hardened bring-up as motortest.sh (clean slate -> preflight -> stack
-# disarmed -> readiness gate -> countdown -> arm) PLUS:
-#   * sysid_logger records the whole run to sysid/runs/<ts>-<test>-water/
-#     (imu/depth/attitude/cmd/temp csvs + camera frames) — the data is the
-#     product even when a test fails.
-#   * NO_ARM=1 bench mode: full stack + mission sequences, but the vehicle is
-#     NEVER armed (thruster_bridge gates on arm state -> zero motor output).
-#     Use for dry rehearsal of these scripts out of water.
+# DISCONNECT-PROOF (2026-07-09, same pattern as sysid_run.sh): this script
+# only does preflight + clean slate, then hands off to a DETACHED supervisor
+# (own session, log in the run dir) that runs countdown -> arm -> mission ->
+# monitor -> disarm + teardown entirely on the Pi. Submerging (= guaranteed
+# WiFi/SSH loss) cannot stop or strand the run; it ALWAYS ends disarmed —
+# at MISSION_COMPLETE/FAILED, stack death, or the RUN_MAX hard cap.
 #
 # Usage (inside robosub_dev, any dir):
 #   TEST=hold  .devcontainer/watertest.sh    # 60 s depth hold @1.2 m + 90 turn
@@ -17,11 +15,15 @@
 #   TEST=gate  .devcontainer/watertest.sh    # StabilizeTask -> GateTask (no roll)
 # Wrappers: holdtest.sh / rolltest.sh / gatetest.sh (same dir).
 #
-#   ABORT: Ctrl-C -> disarm + teardown.   From another shell:
-#          ros2 run epsilon_bridge arming_helper disarm
+#   Ctrl-C while connected = full abort (disarm + teardown).
+#   After an SSH drop the run continues; reconnect and:
+#     tail -f <run_dir>/supervisor.log        watch it
+#     ros2 run epsilon_bridge arming_helper disarm     instant motor kill
+#     pkill -TERM -f watertest_supervisor              full teardown
 #
-# Knobs: ROBOSUB_TEST_DEPTH (1.2), ARM_DELAY (15), NO_ARM (0), STYLE_ROLL
-# (gate test forces 0), MISSION_DEPTH/GATE depth envs pass through.
+# Knobs: ROBOSUB_TEST_DEPTH (1.2), ARM_DELAY (15), NO_ARM (0), RUN_MAX (420 s
+# hard cap armed->teardown), STYLE_ROLL, WITH_DEPTH, SYNTHETIC_DEPTH,
+# HEAVE_BIAS, GRAY_WORLD, READY_TIMEOUT.
 # =============================================================================
 
 TEST="${TEST:-hold}"
@@ -31,35 +33,34 @@ case "$TEST" in
   gate) MISSION_MODE=gate     ; STYLE_ROLL="${STYLE_ROLL:-0}" ;;
   *) echo "TEST must be hold|roll|gate"; exit 1 ;;
 esac
-
-HEAVE_BIAS="${HEAVE_BIAS:-0.0}"
-WITH_DEPTH="${WITH_DEPTH:-true}"
-SYNTHETIC_DEPTH="${SYNTHETIC_DEPTH:--1.0}"
-WORLD_Z_SIGN="${WORLD_Z_SIGN:-1.0}"
-ARM_DELAY="${ARM_DELAY:-15}"
-GRAY_WORLD="${GRAY_WORLD:-1}"
-READY_TIMEOUT="${READY_TIMEOUT:-45}"
-NO_ARM="${NO_ARM:-0}"
 NOTES="${1:-}"
 
-GW_ARG=$([ "$GRAY_WORLD" = "1" ] && echo true || echo false)
 WS=/home/robosub/robosub_ws
 source /opt/ros/humble/setup.bash
 source "${WS}/install/setup.bash"
+set -u
 
 RUN_ID="$(date +%Y%m%d-%H%M%S)-${TEST}test-water"
 RUN_DIR="${WS}/sysid/runs/${RUN_ID}"
 
-# ── 0. clean slate (bracket patterns: never self-match) ─────────────────────
+# ── 0. clean slate ──────────────────────────────────────────────────────────
 echo "[watertest] clean slate..."
 for pat in "[o]mni_control" "epsilon_bridge/[s]ensor_bridge" "epsilon_bridge/[t]hruster_bridge" \
            "epsilon_bridge/[a]rming_helper" "epsilon_sensors/[c]amera" "epsilon_sensors/[i]mu" \
            "epsilon_sensors/[d]epth_sensor" "epsilon_sensors/[d]epth_fusion" "epsilon_sensors/[e]sp32_depth" \
            "[s]ubmarine_node" "[r]ecord_video" "epsilon_bridge/[s]ysid_logger" "epsilon_bridge/[s]ysid_runner" \
-           "[r]os2 launch epsilon_bridge"; do
+           "[w]atertest_supervisor" "[r]os2 launch epsilon_bridge"; do
   pkill -9 -f "$pat" 2>/dev/null || true
 done
 sleep 2
+# Belt-and-braces: a SIGKILLed launch orphans its children and the patterns
+# above can miss renamed cmdlines — sweep ANY leftover ROS node (2026-07-09:
+# two stacks fought over /dev/video0 + the I2C IMU; gate failed confusingly).
+if pgrep -f -- "--ros-args" >/dev/null 2>&1; then
+  echo "[watertest] killing $(pgrep -cf -- "--ros-args") orphaned ROS node(s)"
+  pkill -9 -f -- "--ros-args" 2>/dev/null || true
+  sleep 2
+fi
 sudo chmod a+rw /dev/video0 /dev/video1 /dev/ttyACM0 2>/dev/null || true
 # Hard-killed nodes leave stale FastDDS shared-memory segments that BREAK
 # DISCOVERY for new nodes (every readiness probe reports missing while the
@@ -68,7 +69,7 @@ sudo chmod a+rw /dev/video0 /dev/video1 /dev/ttyACM0 2>/dev/null || true
 rm -f /dev/shm/fastrtps_* /dev/shm/sem.fastrtps* 2>/dev/null || true
 ros2 daemon stop >/dev/null 2>&1; sleep 1; ros2 daemon start >/dev/null 2>&1; sleep 2
 
-# ── 1. preflight (same checks as motortest.sh) ──────────────────────────────
+# ── 1. preflight ────────────────────────────────────────────────────────────
 preflight_fail=0
 check() {
   local label="$1"; shift
@@ -94,24 +95,7 @@ if [ "$preflight_fail" -ne 0 ]; then
   exit 1
 fi
 
-# ── 2. launch stack DISARMED + logger ───────────────────────────────────────
-export ROBOSUB_MISSION="$MISSION_MODE"
-export ROBOSUB_STYLE_ROLL="$STYLE_ROLL"
-
-STACK_PID=""; LOGGER_PID=""
-cleanup() {
-  echo ""
-  echo "[watertest] teardown -> disarm + stop stack + stop logger"
-  ros2 run epsilon_bridge arming_helper disarm 2>/dev/null || true
-  [ -n "$STACK_PID" ] && kill "$STACK_PID" 2>/dev/null || true
-  sleep 1
-  [ -n "$LOGGER_PID" ] && kill -INT "$LOGGER_PID" 2>/dev/null || true
-  sleep 2
-  [ -n "$LOGGER_PID" ] && kill "$LOGGER_PID" 2>/dev/null || true
-  echo "[watertest] run data: ${RUN_DIR}"
-}
-trap cleanup INT TERM
-
+# ── 2. run dir + meta, then DETACHED supervisor ─────────────────────────────
 mkdir -p "$RUN_DIR"
 cat > "${RUN_DIR}/meta.yaml" <<EOF
 run_id: ${RUN_ID}
@@ -121,60 +105,43 @@ date: $(date -Iseconds)
 venue: pool            # EDIT ME
 water_depth_m: null    # EDIT ME
 battery_v: null        # EDIT ME
-no_arm: ${NO_ARM}
+no_arm: ${NO_ARM:-0}
 test_depth_m: ${ROBOSUB_TEST_DEPTH:-1.2}
 notes: "${NOTES}"
 EOF
 
-echo "[watertest] launching stack (disarmed): test=${TEST} mission=${MISSION_MODE} style_roll=${STYLE_ROLL} no_arm=${NO_ARM}"
-ros2 launch epsilon_bridge prequal.launch.py \
-    with_depth:="${WITH_DEPTH}" synthetic_depth:="${SYNTHETIC_DEPTH}" \
-    world_z_sign:="${WORLD_Z_SIGN}" heave_bias:="${HEAVE_BIAS}" gray_world:="${GW_ARG}" &
-STACK_PID=$!
+GW_ARG=$([ "${GRAY_WORLD:-1}" = "1" ] && echo true || echo false)
 
-ros2 run epsilon_bridge sysid_logger --ros-args -p run_dir:="${RUN_DIR}" > "${RUN_DIR}/logger.out" 2>&1 &
-LOGGER_PID=$!
+export RUN_DIR TEST MISSION_MODE STYLE_ROLL GW_ARG
+export WITH_DEPTH="${WITH_DEPTH:-true}" SYNTHETIC_DEPTH="${SYNTHETIC_DEPTH:--1.0}"
+export WORLD_Z_SIGN="${WORLD_Z_SIGN:-1.0}" HEAVE_BIAS="${HEAVE_BIAS:-0.0}"
+export NO_ARM="${NO_ARM:-0}" ARM_DELAY="${ARM_DELAY:-15}"
+export READY_TIMEOUT="${READY_TIMEOUT:-45}" RUN_MAX="${RUN_MAX:-420}"
+export ROBOSUB_TEST_DEPTH="${ROBOSUB_TEST_DEPTH:-1.2}"
+export ROBOSUB_MISSION_DEPTH="${ROBOSUB_MISSION_DEPTH:-1.2}"
+export ROBOSUB_GATE_DEPTH="${ROBOSUB_GATE_DEPTH:-1.2}"
 
-# ── 3. readiness gate ───────────────────────────────────────────────────────
-have_topic() { timeout -k 2 "${2:-5}" ros2 topic echo --once --qos-reliability best_effort "$1" >/dev/null 2>&1; }
-REQUIRED=(
-  "/camera/image_raw:camera frames"
-  "/imu:IMU"
-  "/sensors/heading:sensor_bridge heading"
-  "/sensors/depth:depth (fused or synthetic)"
-  "/sub/status:nav brain alive"
-)
-echo "[watertest] waiting up to ${READY_TIMEOUT}s for a healthy stack..."
-ready=0; SECONDS=0
-while [ "$SECONDS" -lt "$READY_TIMEOUT" ]; do
-  missing=""
-  for item in "${REQUIRED[@]}"; do
-    topic="${item%%:*}"; label="${item#*:}"
-    have_topic "$topic" 4 || missing="${missing}  - ${label} (${topic})\n"
-  done
-  [ -z "$missing" ] && { ready=1; break; }
-  kill -0 "$STACK_PID" 2>/dev/null || { echo "[watertest] launch died."; break; }
-done
-if [ "$ready" -ne 1 ]; then
-  echo "[watertest] READINESS GATE FAILED after ${SECONDS}s. Missing:"
-  echo -e "$missing"
-  cleanup
-  exit 1
-fi
-echo "[watertest] stack healthy."
+SUP_LOG="${RUN_DIR}/supervisor.log"
+setsid bash "$(dirname "$0")/watertest_supervisor.sh" > "$SUP_LOG" 2>&1 < /dev/null &
+SUP_PID=$!
+echo "[watertest] supervisor detached (pid ${SUP_PID}, session-immune to SSH loss)"
+echo "[watertest] log: ${SUP_LOG}"
+echo "[watertest] Ctrl-C here = FULL ABORT while connected. If SSH drops, the"
+echo "[watertest] run continues + self-terminates disarmed (RUN_MAX ${RUN_MAX}s cap)."
 
-# ── 4. countdown -> arm (unless NO_ARM) ─────────────────────────────────────
-if [ "$NO_ARM" = "1" ]; then
-  echo "[watertest] NO_ARM=1: bench mode — mission runs, vehicle stays DISARMED."
-else
-  echo "[watertest] ARMING in ${ARM_DELAY}s. Submerge + stand clear. Ctrl-C aborts."
-  for ((i=ARM_DELAY; i>0; i--)); do
-    echo "[watertest]   arming in ${i}s..."
-    sleep 1
-  done
-  echo "[watertest] >>> ARMING + STARTING (${TEST}) <<<"
-  ros2 run epsilon_bridge arming_helper arm
-fi
+on_abort() {
+  echo ""
+  echo "[watertest] ABORT -> signalling supervisor (disarm + teardown)"
+  kill -TERM -- -"$SUP_PID" 2>/dev/null || kill -TERM "$SUP_PID" 2>/dev/null || true
+  sleep 6
+  exit 130
+}
+trap on_abort INT TERM
 
-wait "$STACK_PID"
-cleanup
+# Live view; tail dying (SSH loss) does not touch the supervisor.
+tail -f --pid="$SUP_PID" "$SUP_LOG" 2>/dev/null &
+TAIL_PID=$!
+while kill -0 "$SUP_PID" 2>/dev/null; do sleep 1; done
+sleep 1
+kill "$TAIL_PID" 2>/dev/null
+echo "[watertest] supervisor finished — see ${SUP_LOG}"

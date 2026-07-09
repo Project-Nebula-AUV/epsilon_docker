@@ -49,7 +49,9 @@ class ArmingHelper(Node):
         self.get_logger().info("/sim/control <- '%s'" % s)
 
     def _arm(self, val):
-        if not self.cli.wait_for_service(timeout_sec=3.0):
+        # 15 s: fresh-node service discovery on the Pi is routinely >3 s
+        # (stale-shm/WiFi era, 2026-07-09 poolside failure at 3.0 s).
+        if not self.cli.wait_for_service(timeout_sec=15.0):
             self.get_logger().warn('thruster_bridge /arm unavailable; arm gate NOT changed')
             return
         req = SetBool.Request()
