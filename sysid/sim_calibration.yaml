@@ -110,8 +110,15 @@ sim:
   # completes in ~2.5-3.5 s across all candidate fits; 80%% is marginal.
   rollRightingMoment: 3.3
   pitchRightingMoment: 3.3
-  # surgePitchCoupling / surgePitchVelCoupling / surgeDragCoeff /
-  # swayDragCoeff: still NOMINAL — S5/S6 (water session 2) fit these.
+  # Translational drag (N/(m/s)^2): S5/S6 IMU fits FAILED (pitch-gravity
+  # leak >= signal, water 2) — these are ENGINEERING ESTIMATES from hull
+  # flat-plate areas (surge ~0.05 m^2 Cd~1, broadside ~0.09 m^2 Cd~1.2),
+  # replacing nominal 1.5/8.0 which let the sim coast >5 m after thrust
+  # (absurd for a blunt 10 kg hull — broke scaled-course rehearsal).
+  # REFINE from course-video transit speeds at water session 1/2.
+  surgeDragCoeff: 25.0
+  swayDragCoeff: 55.0
+  # surgePitchCoupling / surgePitchVelCoupling: still NOMINAL.
 
 sensors:
   # --- simulator_node emulation parameter defaults ---

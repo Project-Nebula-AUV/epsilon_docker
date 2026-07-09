@@ -81,13 +81,27 @@ class SubmarineSimulator:
         seed = os.environ.get('ROBOSUB_SIM_SEED')
         if seed:
             random.seed(int(seed))
+        # Scaled-course overrides (pool rehearsal): gate distance and slalom
+        # layout in metres. Defaults = full-scale course. Set all three to
+        # mirror the physical pool layout (measured from the start wall).
+        self._gate_x = float(os.environ.get('ROBOSUB_GATE_X',
+                                            self.prequal_config.GATE_X_POS))
+        self._slalom_start = float(os.environ.get('ROBOSUB_SLALOM_START', 8.0))
+        self._slalom_step = float(os.environ.get('ROBOSUB_SLALOM_STEP', 4.0))
+        if (self._gate_x != self.prequal_config.GATE_X_POS
+                or self._slalom_start != 8.0 or self._slalom_step != 4.0):
+            print(f"[sim] SCALED COURSE: gate_x={self._gate_x} "
+                  f"slalom_start=+{self._slalom_start} step={self._slalom_step}",
+                  flush=True)
         self.prequal_gate = PrequalGate(
-            x = self.prequal_config.GATE_X_POS, center_y = self.config.worldHeight / 2,
+            x = self._gate_x, center_y = self.config.worldHeight / 2,
             z_top = self.prequal_config.GATE_DEPTH_METERS, width = self.prequal_config.GATE_WIDTH_METERS,
             height = self.prequal_config.GATE_OPENING_HEIGHT, color = self.prequal_config.GATE_COLOR
         )
         self.prequal_marker = PrequalMarker(
-            x = self.prequal_config.MARKER_X_POS, y = self.config.worldHeight / 2,
+            x = self._gate_x + (self.prequal_config.MARKER_X_POS
+                                - self.prequal_config.GATE_X_POS),
+            y = self.config.worldHeight / 2,
             z_top = -self.prequal_config.POLE_ABOVE_SURFACE_METERS,
             z_bottom = self.config.worldDepth - 0.01,
             radius = self.prequal_config.MARKER_DIAMETER_METERS / 2, color = self.prequal_config.MARKER_COLOR
@@ -98,7 +112,7 @@ class SubmarineSimulator:
         self.slalom_poles = []
         if os.environ.get('ROBOSUB_MISSION', '').lower() != 'orbit':
             self.prequal_marker = None
-            gate_x = self.prequal_config.GATE_X_POS
+            gate_x = self._gate_x
             spacing = 1.524            # white-red-white lateral spacing
             wiggle = spacing * 0.25
             # The whole lane sits laterally offset from the gate axis —
@@ -112,7 +126,7 @@ class SubmarineSimulator:
             print(f"[sim] slalom lane offset {lane_offset:+.2f} m", flush=True)
             last_y = self.config.worldHeight / 2 + lane_offset
             for i in range(3):
-                sx = gate_x + 8.0 + i * 4.0
+                sx = gate_x + self._slalom_start + i * self._slalom_step
                 y = last_y + random.uniform(-wiggle, wiggle) if i > 0 else last_y
                 y = float(np.clip(y, spacing * 2, self.config.worldHeight - spacing * 2))
                 last_y = y

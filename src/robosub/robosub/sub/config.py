@@ -137,7 +137,12 @@ class SimulationConfig:
             self.worldDepth = 1.52    # the user's pool (5 ft)
         elif venue == 'comp':
             self.worldDepth = 5.8     # competition (to 19 ft)
-        if venue:
+        # Explicit override wins over the venue presets (the user's pool is
+        # ~2.1 m — neither preset). Scaled-course rehearsal sets this.
+        wd = os.environ.get('ROBOSUB_WORLD_DEPTH')
+        if wd:
+            self.worldDepth = float(wd)
+        if venue or wd:
             print(f"[config] venue '{venue}': worldDepth={self.worldDepth} m",
                   flush=True)
 

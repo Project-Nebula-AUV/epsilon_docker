@@ -8,6 +8,7 @@ vehicle laterally onto the half-opening's center. The return gate runs the
 reciprocal axis (reverse=True) and may search in the opposite direction.
 """
 from robosub.sub.tasks.task_base import Task
+import os
 from robosub.sub.tasks.common_subtasks import (
     CaptureReference, DiveToDepth, AcquireTarget, TurnToHeading,
     CenterOnGateHalf, Stabilize, StyleRollSubtask, DriveThroughGate)
@@ -63,8 +64,13 @@ class GateTask(Task):
                 CenterOnGateHalf(side=side),
                 Stabilize(duration=1.5),
             ]
+        # Blind post-gate clearance is a COURSE-SCALE distance (default 4 s
+        # ~ full-scale 8 m gap at sim speed). Pool rehearsal MUST shrink it
+        # or the sub plows through the slalom field (seen in scaled sim).
+        clear_s = float(os.environ.get('ROBOSUB_GATE_CLEAR_S', '4.0'))
         subtasks += [
-            DriveThroughGate(side=side, surge_power=surge_power),
+            DriveThroughGate(side=side, surge_power=surge_power,
+                             clear_secs=clear_s),
         ]
         super().__init__(subtasks=subtasks, search_direction=search_direction)
 
