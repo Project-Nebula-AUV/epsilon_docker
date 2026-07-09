@@ -61,6 +61,12 @@ for pat in "[o]mni_control" "epsilon_bridge/[s]ensor_bridge" "epsilon_bridge/[t]
 done
 sleep 2
 sudo chmod a+rw /dev/video0 /dev/video1 /dev/ttyACM0 2>/dev/null || true
+# Hard-killed nodes leave stale FastDDS shared-memory segments that BREAK
+# DISCOVERY for new nodes (every readiness probe reports missing while the
+# stack is healthy — bit us 2026-07-09). Safe here: everything ROS was just
+# pkilled. Also bounce the CLI daemon (same failure mode, cheaper cause).
+rm -f /dev/shm/fastrtps_* /dev/shm/sem.fastrtps* 2>/dev/null || true
+ros2 daemon stop >/dev/null 2>&1; sleep 1; ros2 daemon start >/dev/null 2>&1; sleep 2
 
 # ── 1. preflight (same checks as motortest.sh) ──────────────────────────────
 preflight_fail=0
