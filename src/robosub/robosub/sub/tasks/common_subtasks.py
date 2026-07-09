@@ -511,12 +511,14 @@ class StyleRollSubtask(Subtask):
     UNCOMMIT_RATE = -0.3  # rad/s against carry dir -> stalled, resume pump
     PUMP_MIN_RATE = 0.05  # rad/s — below this, steer by position not rate
 
-    def __init__(self, degrees: float = 720.0, roll_power: float = 0.80,
+    def __init__(self, degrees: float = 720.0, roll_power: float = 1.00,
                  settle_deg: float = 2.5, settle_rate: float = 0.08,
                  timeout: float = 90.0):
         super().__init__()
         self.degrees = degrees
-        self.roll_power = roll_power   # 0.80 cap: F12 brownout margin
+        self.roll_power = roll_power   # 1.00 since water-2 S9: two 2.5 s
+        # 100% roll couples ran with NO brownout, and the +100% pulse did a
+        # REAL 360 (gyro-integrated). 100% completes the roll in ~2.5-3.5 s.
         self.settle_deg = settle_deg
         self.settle_rate = settle_rate
         self.TIMEOUT = timeout

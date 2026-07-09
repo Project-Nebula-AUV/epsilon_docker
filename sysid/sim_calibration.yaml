@@ -26,22 +26,31 @@ sim:
   # volume: SURFACE value, mass + the ~+1 N just-submerged positive trim
   # ((m*g+1)/(rho*g)). Water 1 confirmed the +1 N prior indirectly: hover
   # trim -22% cmd ~= 1.45 N pair thrust vs ~1 N buoyancy + margin.
-  subVolume: 0.010078
+  # WATER 2 S8: trim-free surface net buoyancy = +0.04 N up (was +1 N prior
+  # from water-1 hover trim -- superseded by the direct force-balance fit;
+  # vehicle also re-ballasted between sessions). V = (m*g+0.037)/(rho*g).
+  subVolume: 0.0099834
   # F13 (2026-07-07 water 1, S3/S7): buoyancy FALLS with depth — the sub sat
   # on the pool floor at ~2 m with ZERO thrust (fail-safe-to-surface DOES NOT
   # HOLD below ~1.5-2 m). Free-sink/rise at ~1.9 m was ~±0.01 m/s => B(1.9)~0
   # => slope ~= 1.0 N / 1.9 m. ~0.5-0.7 L compressible volume (trapped air /
   # enclosure flex). Fit degeneracy note: S3 descent window alone wanted a
   # steeper slope; 0.53 is pinned by the clean free-sink observation.
-  buoyancyDepthSlope: 0.53
+  # WATER 2 (2026-07-08, S8 run 20260709-011755, robust bin fit rms 0.08 N):
+  # (W-B)(z) = -0.21 + 0.41*z N under trim -7.6%% => slope refined 0.53->0.41,
+  # and the sub is NEUTRAL to ~4 g at the surface (see subVolume).
+  buoyancyDepthSlope: 0.41
 
   # --- Inertias ---
   subInertia_Z: 0.434      # box-model prior (kept: S4 steady+decay jointly
                            # consistent with it; only c2/Iz is identified)
-  subInertia_Y: 0.73       # box prior 0.366 x 2.0 added-mass factor (assumed
+  subInertia_Y: 0.53   # box prior x measured roll added-mass factor (w2: 1.45)       # box prior 0.366 x 2.0 added-mass factor (assumed
                            # same factor as measured roll; no pitch actuator
                            # to identify it directly)
-  subInertia_X: 0.58       # MEASURED effective (added mass included): S7
+  # WATER 2 S9 (run 20260709-023250): rate-based fit of all 6 driven+release
+  # roll episodes with known tau (attitude filter attenuates fast rolls ~35%%,
+  # so water-1 angle-based numbers were biased): Ix_eff 0.58 -> 0.42.
+  subInertia_X: 0.42
                            # known-torque vertical pulses, tau/omega_dot,
                            # median of +-40% pulses (0.51-0.96 spread)
 
@@ -73,8 +82,14 @@ sim:
   # Roll: S7 submerged post-pulse decays C=c/Ix ~= 1.13 1/s (linear) =>
   # c_lin ~= 0.66; quadratic equivalent at the 1-3 rad/s band ~= 0.5.
   # zeta ~= 0.19 at omega_n ~= 3 rad/s — the real sub rings.
-  angularDragCoeff_X: 0.5
-  angularDragCoeff_Y: 0.5  # assumed = roll (no pitch actuator to probe)
+  # WATER 2 S9 rate fit: mixed damping c1=0.18 (linear) + c2=0.42 (quad);
+  # wn=2.80 rad/s reproduces the observed 2.2-2.3 s period and the +-100%%
+  # episode inversions. (Fit valley is shallow: k 2.3-3.3 trades vs damping --
+  # this triplet is the middle, period-matched pick.)
+  angularDragCoeff_X: 0.42
+  angularDragLinearCoeff_X: 0.18
+  angularDragCoeff_Y: 0.42 # assumed = roll (no pitch actuator to probe)
+  angularDragLinearCoeff_Y: 0.18
 
   # --- Righting moments (N*m/rad, small-angle; torque = k*sin(theta)) ---
   # SUBMERGED small-angle righting from S7 post-pulse roll decays (free
@@ -89,8 +104,12 @@ sim:
   # at 100% = 5.5 N*m (marginal + F12 brownout risk). Resonant pump at
   # ~0.45-0.5 Hz (omega_n 3 rad/s, zeta 0.19, gain ~2.6x) clears 90 deg at
   # 80% power => W6 builds the pump; S9 water 2 confirms.
-  rollRightingMoment: 4.6
-  pitchRightingMoment: 4.6
+  # WATER 2 S9: submerged righting from driven-rate fit k = 3.3 N*m/rad
+  # (BG ~3.4 cm). STYLE ROLL IS REAL: the +100%% pulse barrel-rolled a full
+  # 360 in-water (past ~90 deg buoyancy torque ASSISTS); 100%% bang-bang
+  # completes in ~2.5-3.5 s across all candidate fits; 80%% is marginal.
+  rollRightingMoment: 3.3
+  pitchRightingMoment: 3.3
   # surgePitchCoupling / surgePitchVelCoupling / surgeDragCoeff /
   # swayDragCoeff: still NOMINAL — S5/S6 (water session 2) fit these.
 

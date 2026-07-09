@@ -1,36 +1,38 @@
-# TRIM VARIANT: heave wrench -0.22 (= verticals ~-22) on all non-heave steps
-# -- buoyancy hold across the run; the heave ramp itself stays pure.
+# TRIM VARIANT: a HEAVE trim on every non-heave step holds depth so the
+# horizontal/yaw deadband ramps stay at roughly constant depth.
 # S8 deadband ramps: 0 -> +/-0.15 wrench ramps per axis; the command at motion
 # onset (gyro/accel departure in imu.csv) = the deadband.
-# 2026-07-08: STEEPENED. The old 10 s ramps / 3 s rests made a ~100 s run that
-# drifted to the pool floor before finishing -- the -0.22 SURFACE hover trim
-# can not hold once buoyancy fades with depth (F13, ~0.53 N/m). Ramps 10->5 s
-# (rate 0.015->0.030 /s wrench), rests 3->2 s: total ~60 s. HEAVE moved FIRST
-# (it is the only descent-adding ramp) so it is measured with max floor
-# clearance. 18 Hz IMU still resolves onset to ~0.005 wrench at the new rate.
+# 2026-07-08: STEEPENED (ramps 10->5 s, rests 3->2 s ~= 60 s) + heave FIRST.
+# 2026-07-09: TRIM -0.22 -> -0.15 -> -0.076 (iterated live; ~= neutral). Still sank at -0.15
+# (0.68 N down), so the sub is MUCH closer to neutral than the +1 N assumption
+# -- real buoyancy < ~0.7 N. -0.076 = verticals ~-7% (0.15 N down). ITERATE:
+# still sinking -> raise toward 0 / positive (up-thrust if heavy); rising ->
+# more negative. Heave-ramp target -0.20 (a real 7->20% descent ramp).
+# NOTE: sub ~<1 N off neutral -> no fixed open-loop trim holds a full 60 s in
+# ~2 m; ballast nearer neutral or run fewer axes per dunk for clean data.
 name: s8_deadband_ramps_trim
 mode: wrench
 max_abs: 20.0
 steps:
-  - {dur: 3.0, wrench: [0, 0, -0.22, 0, 0], label: baseline}
-  - {dur: 5.0, wrench: [0, 0, -0.15, 0, 0], ramp: true, label: heave-ramp-down}
-  - {dur: 1.0, wrench: [0, 0, -0.15, 0, 0], label: heave-hold}
-  - {dur: 2.0, wrench: [0, 0, -0.22, 0, 0], label: rest}
-  - {dur: 5.0, wrench: [0.15, 0, -0.22, 0, 0], ramp: true, label: surge-ramp-up}
-  - {dur: 1.0, wrench: [0.15, 0, -0.22, 0, 0], label: surge-hold}
-  - {dur: 2.0, wrench: [0, 0, -0.22, 0, 0], label: rest}
-  - {dur: 5.0, wrench: [-0.15, 0, -0.22, 0, 0], ramp: true, label: surge-ramp-down}
-  - {dur: 1.0, wrench: [-0.15, 0, -0.22, 0, 0], label: surge-hold-neg}
-  - {dur: 2.0, wrench: [0, 0, -0.22, 0, 0], label: rest}
-  - {dur: 5.0, wrench: [0, 0.15, -0.22, 0, 0], ramp: true, label: sway-ramp-up}
-  - {dur: 1.0, wrench: [0, 0.15, -0.22, 0, 0], label: sway-hold}
-  - {dur: 2.0, wrench: [0, 0, -0.22, 0, 0], label: rest}
-  - {dur: 5.0, wrench: [0, -0.15, -0.22, 0, 0], ramp: true, label: sway-ramp-down}
-  - {dur: 1.0, wrench: [0, -0.15, -0.22, 0, 0], label: sway-hold-neg}
-  - {dur: 2.0, wrench: [0, 0, -0.22, 0, 0], label: rest}
-  - {dur: 5.0, wrench: [0, 0, -0.22, 0.15, 0], ramp: true, label: yaw-ramp-ccw}
-  - {dur: 1.0, wrench: [0, 0, -0.22, 0.15, 0], label: yaw-hold}
-  - {dur: 2.0, wrench: [0, 0, -0.22, 0, 0], label: rest}
-  - {dur: 5.0, wrench: [0, 0, -0.22, -0.15, 0], ramp: true, label: yaw-ramp-cw}
-  - {dur: 1.0, wrench: [0, 0, -0.22, -0.15, 0], label: yaw-hold-neg}
-  - {dur: 3.0, wrench: [0, 0, -0.22, 0, 0], label: tail}
+  - {dur: 3.0, wrench: [0, 0, -0.076, 0, 0], label: baseline}
+  - {dur: 5.0, wrench: [0, 0, -0.20, 0, 0], ramp: true, label: heave-ramp-down}
+  - {dur: 1.0, wrench: [0, 0, -0.20, 0, 0], label: heave-hold}
+  - {dur: 2.0, wrench: [0, 0, -0.076, 0, 0], label: rest}
+  - {dur: 5.0, wrench: [0.15, 0, -0.076, 0, 0], ramp: true, label: surge-ramp-up}
+  - {dur: 1.0, wrench: [0.15, 0, -0.076, 0, 0], label: surge-hold}
+  - {dur: 2.0, wrench: [0, 0, -0.076, 0, 0], label: rest}
+  - {dur: 5.0, wrench: [-0.15, 0, -0.076, 0, 0], ramp: true, label: surge-ramp-down}
+  - {dur: 1.0, wrench: [-0.15, 0, -0.076, 0, 0], label: surge-hold-neg}
+  - {dur: 2.0, wrench: [0, 0, -0.076, 0, 0], label: rest}
+  - {dur: 5.0, wrench: [0, 0.15, -0.076, 0, 0], ramp: true, label: sway-ramp-up}
+  - {dur: 1.0, wrench: [0, 0.15, -0.076, 0, 0], label: sway-hold}
+  - {dur: 2.0, wrench: [0, 0, -0.076, 0, 0], label: rest}
+  - {dur: 5.0, wrench: [0, -0.15, -0.076, 0, 0], ramp: true, label: sway-ramp-down}
+  - {dur: 1.0, wrench: [0, -0.15, -0.076, 0, 0], label: sway-hold-neg}
+  - {dur: 2.0, wrench: [0, 0, -0.076, 0, 0], label: rest}
+  - {dur: 5.0, wrench: [0, 0, -0.076, 0.15, 0], ramp: true, label: yaw-ramp-ccw}
+  - {dur: 1.0, wrench: [0, 0, -0.076, 0.15, 0], label: yaw-hold}
+  - {dur: 2.0, wrench: [0, 0, -0.076, 0, 0], label: rest}
+  - {dur: 5.0, wrench: [0, 0, -0.076, -0.15, 0], ramp: true, label: yaw-ramp-cw}
+  - {dur: 1.0, wrench: [0, 0, -0.076, -0.15, 0], label: yaw-hold-neg}
+  - {dur: 3.0, wrench: [0, 0, -0.076, 0, 0], label: tail}

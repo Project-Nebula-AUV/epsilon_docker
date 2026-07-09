@@ -1,0 +1,129 @@
+[run] HW-FAITHFUL sensing (ESP32 depth-chain emulation + zeroed lateral velocity)
+[run] epsilon-plant actuation: 1
+[run] mode=full hw_faithful=1 started (attempt 2) — watch http://epsilon:8765
+t=   0.01s  StabilizeTask|STABILIZING (2.6/3.0s)
+t=   2.37s  GateTask|GateTask[1]:DiveToDepth(1.6m)
+t=   2.51s  GateTask|GateTask[2]:AcquireTarget(gate 0s)
+t=   2.57s  GateTask|GateTask[4]:Stabilize
+t=   8.92s  GateTask|GateTask[5]:CenterOnGateHalf(right ok:0)
+t=  15.09s  GateTask|GateTask[6]:Stabilize
+t=  16.57s  GateTask|GateTask[7]:CenterOnGateHalf(right ok:1)
+t=  17.86s  GateTask|GateTask[8]:StyleRollSubtask(-0/360 pump)
+t=  21.64s  GateTask|GateTask[8]:StyleRollSubtask(+302/360 carry)
+t=  21.89s  GateTask|GateTask[8]:StyleRollSubtask(+347/360 level)
+t=  23.56s  GateTask|GateTask[9]:Stabilize
+t=  25.27s  GateTask|GateTask[10]:TurnToHeading(357 deg)
+t=  25.34s  GateTask|GateTask[11]:CenterOnGateHalf(right ok:0)
+t=  42.67s  GateTask|GateTask[13]:Stabilize
+t=  44.16s  GateTask|GateTask[15]:CenterOnGateHalf(right ok:1)
+t=  44.44s  GateTask|GateTask[16]:Stabilize
+t=  45.94s  GateTask|GateTask[17]:DriveThroughGate(right track)
+t=  49.01s  GateTask|GateTask[17]:DriveThroughGate(right clear)
+t=  53.02s  StabilizeTask|STABILIZING (0.0/3.0s)
+t=  56.01s  SweepForSlalomTask|SWEEPING (seen 1/8)
+t=  56.12s  SlalomTask|SEARCH pass=0 side=?
+t=  56.14s  SlalomTask|CENTER pass=0 side=right
+t=  60.92s  SlalomTask|APPROACH pass=0 side=right
+t=  62.07s  SlalomTask|CLEAR pass=0 side=right
+t=  64.09s  SlalomTask|SEARCH pass=1 side=right
+t=  73.11s  SlalomTask|FINISH pass=1 side=right
+t=  73.12s  StabilizeTask|STABILIZING (0.0/3.0s)
+t=  76.17s  SlalomTask|DIVE pass=0 side=left REV
+t=  82.44s  SlalomTask|SEARCH pass=0 side=left REV
+t=  82.46s  SlalomTask|CENTER pass=0 side=left REV
+t=  89.32s  SlalomTask|APPROACH pass=0 side=left REV
+t= 103.26s  SlalomTask|CLEAR pass=16 side=left REV
+t= 105.27s  SlalomTask|FINISH pass=17 side=left REV
+t= 105.29s  GateTask|GateTask[2]:AcquireTarget(gate 0s)
+t= 105.36s  GateTask|GateTask[3]:TurnToHeading(177 deg)
+t= 105.47s  GateTask|GateTask[4]:Stabilize
+t= 106.47s  GateTask|GateTask[5]:CenterOnGateHalf(right ok:0)
+t= 126.46s  GateTask|GateTask[6]:Stabilize T!1
+t= 127.94s  GateTask|GateTask[7]:DriveThroughGate(right entry) T!1
+t= 131.94s  GateTask|GateTask[7]:DriveThroughGate(right clear) T!1
+t= 135.94s  StabilizeTask|STABILIZING (0.0/10.0s)
+t= 150.24s  MISSION_COMPLETE|
+---
+task sequence: StabilizeTask -> GateTask -> StabilizeTask -> SweepForSlalomTask -> SlalomTask -> StabilizeTask -> SlalomTask -> GateTask -> StabilizeTask -> MISSION_COMPLETE
+RESULT: completed WITH timeout valves (not a clean pass)
+./run_course.sh: line 97:  2257 Killed                  ros2 run robosub sim_gui_node $SIM_ARGS > /tmp/run_sim.log 2>&1
+./run_course.sh: line 97:  2258 Killed                  PYTHONUNBUFFERED=1 ros2 run robosub submarine_node > /tmp/run_sub.log 2>&1
+=== submarine log tail ===
+WARN: CenterOnGateHalf blind 19.8s (no bearing — backing up)
+WARN: CenterOnGateHalf blind 19.8s (no bearing — backing up)
+WARN: CenterOnGateHalf blind 19.8s (no bearing — backing up)
+WARN: CenterOnGateHalf blind 19.8s (no bearing — backing up)
+WARN: CenterOnGateHalf blind 19.8s (no bearing — backing up)
+WARN: CenterOnGateHalf blind 19.9s (no bearing — backing up)
+WARN: CenterOnGateHalf blind 19.9s (no bearing — backing up)
+WARN: CenterOnGateHalf blind 19.9s (no bearing — backing up)
+WARN: CenterOnGateHalf TIMEOUT after 20s — completing (safety valve)
+WARN: DriveThroughGate never saw the gate — clearing blind
+INFO: task GateTask completed
+INFO: task StabilizeTask completed
+INFO: task StabilizeTask completed
+INFO: ShutdownTask — zero thrust.
+INFO: task ShutdownTask completed
+=== judge ===
+=== RUN: 0.0s .. 160.5s (9393 samples) ===
+
+--- STATE TIMELINE (dur > 0.5s; * = >60s HANG-SUSPECT) ---
+    0.0s +   7.7s  WAITING                  Press Start to begin
+    7.8s +   4.9s  StabilizeTask            STABILIZING (#/#s)
+   12.9s +   6.3s  GateTask                 GateTask[#]:Stabilize
+   19.2s +   6.1s  GateTask                 GateTask[#]:CenterOnGateHalf(right ok:#)
+   25.4s +   1.5s  GateTask                 GateTask[#]:Stabilize
+   26.8s +   1.3s  GateTask                 GateTask[#]:CenterOnGateHalf(right ok:#)
+   28.2s +   3.7s  GateTask                 GateTask[#]:StyleRollSubtask(#/# pump)
+   32.2s +   1.7s  GateTask                 GateTask[#]:StyleRollSubtask(#/# level)
+   33.9s +   1.7s  GateTask                 GateTask[#]:Stabilize
+   35.6s +  17.4s  GateTask                 GateTask[#]:CenterOnGateHalf(right ok:#)
+   53.0s +   1.5s  GateTask                 GateTask[#]:Stabilize
+   54.7s +   1.5s  GateTask                 GateTask[#]:Stabilize
+   56.2s +   3.0s  GateTask                 GateTask[#]:DriveThroughGate(right track)
+   59.3s +   4.0s  GateTask                 GateTask[#]:DriveThroughGate(right clear)
+   63.3s +   3.0s  StabilizeTask            STABILIZING (#/#s)
+   66.5s +   4.7s  SlalomTask               CENTER pass=# side=right
+   71.2s +   1.1s  SlalomTask               APPROACH pass=# side=right
+   72.3s +   2.0s  SlalomTask               CLEAR pass=# side=right
+   74.4s +   9.0s  SlalomTask               SEARCH pass=# side=right
+   83.4s +   3.1s  StabilizeTask            STABILIZING (#/#s)
+   86.5s +   6.2s  SlalomTask               DIVE pass=# side=left REV
+   92.8s +   6.9s  SlalomTask               CENTER pass=# side=left REV
+   99.6s +  13.9s  SlalomTask               APPROACH pass=# side=left REV
+  113.5s +   2.0s  SlalomTask               CLEAR pass=# side=left REV
+  115.8s +   1.0s  GateTask                 GateTask[#]:Stabilize
+  116.8s +  20.0s  GateTask                 GateTask[#]:CenterOnGateHalf(right ok:#)
+  136.8s +   1.5s  GateTask                 GateTask[#]:Stabilize T!
+  138.2s +   4.0s  GateTask                 GateTask[#]:DriveThroughGate(right entry) T!
+  142.2s +   4.0s  GateTask                 GateTask[#]:DriveThroughGate(right clear) T!
+  146.2s +  14.3s  StabilizeTask            STABILIZING (#/#s)
+
+--- GATE (x=10.0, center_y=7.5, half-centers y=6.75/8.25, opening z>0.2) ---
+   60.5s OUT  y=6.79 (off-center -0.71 m; right(y<c), off-half-center +0.04 m)  z=1.49 during GateTask
+  120.1s BACK  y=8.15 (off-center +0.65 m; left(y>c), off-half-center -0.10 m)  z=1.57 during GateTask
+
+--- STYLE ROLL ---
+span    28.2s..   33.9s (5.7s)  net roll +351 deg (peak excursion 379)
+pre-roll pose x=4.04 y=7.06 z=1.62 hdg=357.4
+max drift during roll: dx=0.66 dy=0.14 dz=0.04 m, max heading dev 1.7 deg
+at roll end: dx=-0.66 dy=-0.08 dz=-0.03 hdg dev +0.1 roll=+0.2
+at drive-through start (t=56.2): dx=+0.12 dy=+0.01 dz=-0.05 hdg dev -0.6
+
+--- SLALOM GATELETS ---
+   64.3s OUT  x= 18.0 y=6.42 right(y<red) THROUGH-GAP off-gap-mid -0.51 m, nearest pole 0.26 m (StabilizeTask)
+  113.6s BACK  x= 18.0 y=6.93 right(y<red) THROUGH-GAP off-gap-mid -0.00 m, nearest pole 0.76 m (SlalomTask)
+   67.8s OUT  x= 22.0 y=6.50 right(y<red) THROUGH-GAP off-gap-mid -0.63 m, nearest pole 0.14 m (SlalomTask)
+  111.5s BACK  x= 22.0 y=7.03 right(y<red) THROUGH-GAP off-gap-mid -0.10 m, nearest pole 0.66 m (SlalomTask)
+   72.7s OUT  x= 26.0 y=7.10 right(y<red) THROUGH-GAP off-gap-mid +0.07 m, nearest pole 0.69 m (SlalomTask)
+  109.5s BACK  x= 26.0 y=6.99 right(y<red) THROUGH-GAP off-gap-mid -0.05 m, nearest pole 0.71 m (SlalomTask)
+
+--- DEPTH BY TASK (target 1.5, gate legs 1.55) ---
+WAITING                  z mean 0.11  min 0.10  max 0.15
+StabilizeTask            z mean 1.29  min 0.11  max 1.64
+GateTask                 z mean 1.58  min 1.48  max 1.72
+SweepForSlalomTask       z mean 1.52  min 1.52  max 1.52
+SlalomTask               z mean 1.50  min 1.46  max 1.53
+
+--- END: t=160.5s task=StabilizeTask state=STABILIZING (4.3/2.0s)
+    pose x=0.50 y=10.22 z=0.11 hdg=176.2 roll=0.0

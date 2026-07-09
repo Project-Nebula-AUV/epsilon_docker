@@ -220,8 +220,10 @@ class SubmarineSimulator:
         drag_sway  = -self.config.swayDragCoeff * vel_sway * abs(vel_sway)
         drag_heave = -self.config.heaveDragCoeff * vel_heave * abs(vel_heave)
         drag_yaw   = -self.config.angularDragCoeff_Z * self.subPhysics.angular_velocity_z**2 * np.sign(self.subPhysics.angular_velocity_z)
-        drag_roll  = -self.config.angularDragCoeff_X * self.subPhysics.angular_velocity_x**2 * np.sign(self.subPhysics.angular_velocity_x)
-        drag_pitch = -self.config.angularDragCoeff_Y * self.subPhysics.angular_velocity_y**2 * np.sign(self.subPhysics.angular_velocity_y)
+        drag_roll  = (-self.config.angularDragCoeff_X * self.subPhysics.angular_velocity_x**2 * np.sign(self.subPhysics.angular_velocity_x)
+                      - self.config.angularDragLinearCoeff_X * self.subPhysics.angular_velocity_x)
+        drag_pitch = (-self.config.angularDragCoeff_Y * self.subPhysics.angular_velocity_y**2 * np.sign(self.subPhysics.angular_velocity_y)
+                      - self.config.angularDragLinearCoeff_Y * self.subPhysics.angular_velocity_y)
         # Rotate body-frame sway/heave thrust through roll so thrusters on an
         # inverted sub push the right way in the world frame (matters for the
         # style-roll maneuver; identity when roll = 0).

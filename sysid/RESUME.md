@@ -1,5 +1,36 @@
 # SYSID RESUME — canonical state. Update BEFORE ending every session.
 
+2026-07-09 — **WATER SESSION 2 ANALYZED + CALIBRATION LANDED (backups
+.pre-w2cal.20260709; run metas annotated .pre-w2meta*).** Runs: S5 surge,
+S6 sway (ESP32 depth DEAD whole run — header-only CSVs; est ~0.9 m), S8 trim
+-0.076 sink, S9 roll authority. Pool ~9 ft per user (S8 sensor flatlined
++2.11 m at floor contact — discrepancy recorded, fits unaffected).
+- **S8 (bin fit, rms 0.08 N): (W-B)(z) = -0.21 + 0.41*z N → the sub is
+  NEUTRAL to ~4 g at the surface** (that is why trim tuning could not
+  converge) and buoyancyDepthSlope refines 0.53 → 0.41. No fixed trim can
+  hold depth (unstable gradient) — closed-loop depth is the durable fix.
+- **S9 HEADLINE: the +100% roll pulse did a REAL 360 BARREL ROLL in the
+  pool** (gyro-integrated 390 deg; -100% reached ~164, stalled just past
+  inverted). The attitude filter attenuates fast rolls ~35% (max 88 deg
+  reported) — use -gy (imu.csv, rad/s) for fast roll, NOT attitude roll.
+  Rate fit (6 episodes, known tau): Ix 0.42, k 3.3, drag c1 0.18 + c2q 0.42
+  (shallow valley; wn 2.8 matches 2.2-2.3 s period). NO brownout at 100%.
+- **Landed in sim** — sim_calibration.yaml (slope 0.41, subVolume 0.0099834
+  = +0.04 N surface, Ix 0.42, Iy 0.53, righting 3.3/3.3, roll drag 0.42
+  quad + 0.18 linear via NEW angularDragLinearCoeff_X/Y in config.py +
+  simulator.py) and StyleRoll roll_power 0.80 → 1.00 (F12 cleared by S9).
+- **VERIFIED: full course WITH style roll MISSION_COMPLETE 150.2 s** (was
+  194-237 s with timeout valves) — roll completes +351 deg in ~4-6 s, drift
+  <0.7 m, all 6 gatelets THROUGH both ways. Log /tmp/w2cal_full_roll.log
+  (container /tmp — copy to keep).
+- S5/S6 translational drag: UNFITTABLE from IMU (pitch-gravity leak ~ signal;
+  sub also yawed 147-174 deg during runs). NEXT WATER SESSION: stopwatch a
+  ~3 m straight transit at fixed cmd (one number → v_term → drag). Soft sway
+  numbers (m_eff~44, c2~450+, at grid edge) NOT landed in sim.
+- S2b never run in water (S8 sink substituted for the slope). S10 vision
+  IGNORED per user (dusk/murky; redo in the brighter pool later).
+- Analysis state + scripts: ~/.claude/plans/water2-fits/ on the laptop.
+
 2026-07-07 PM — **W6 SESSION (Session D): epsilon-plant + depth re-tune +
 roll pump + vision/centering overhaul + camera match — ALL DEPLOYED
 (backups `.pre-20260707-w6`), see "## W6 session" below.** F13 DECIDED by

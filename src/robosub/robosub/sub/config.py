@@ -73,6 +73,10 @@ class SimulationConfig:
     angularDragCoeff_Z: float = 3.0  # Yaw drag
     angularDragCoeff_Y: float = 3.0  # Pitch drag (drives the passive pitch DOF)
     angularDragCoeff_X: float = 3.0  # Roll drag
+    # Linear angular drag (N*m*s/rad), ADDED water-2: S9 rate fit shows roll
+    # damping is mixed linear+quadratic. 0.0 = legacy quadratic-only.
+    angularDragLinearCoeff_X: float = 0.0
+    angularDragLinearCoeff_Y: float = 0.0
 
     # --- Passive attitude dynamics (2026-07-06, sysid W5) -------------------
     # The vehicle has NO pitch actuators (verticals are left/right), and it is
