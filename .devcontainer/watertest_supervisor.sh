@@ -145,6 +145,31 @@ else
   fi
 fi
 
+# ── CONFIRM the mission actually STARTED (left WAITING) ─────────────────────
+# arming_helper's single-shot 'start' publish is unreliable on this Pi's slow
+# DDS discovery -> the mission often sat in WAITING with zeroed motors even
+# after "ARMED" (2026-07-09 water runs). Re-send 'start' with `pub --once -w 1`
+# (WAITS for the submarine_node subscription to match before publishing =
+# guaranteed delivery, the exact mechanism sysid_run.sh uses) and CONFIRM via
+# /sub/status until the mission leaves WAITING. Closed-loop, discovery-proof.
+started=0
+for i in $(seq 1 20); do
+  last=$(grep -a "data:" "$STATUS_FILE" 2>/dev/null | tail -1)
+  case "$last" in
+    *WAITING*|"")
+      timeout 8 ros2 topic pub --once -w 1 /sim/control std_msgs/msg/String \
+          "{data: 'start'}" >/dev/null 2>&1
+      sleep 1 ;;
+    *)
+      started=1
+      log "mission STARTED: ${last#*data: }"
+      break ;;
+  esac
+done
+if [ "$started" -ne 1 ]; then
+  log "!!! mission never left WAITING after 20 tries — start not delivered."
+fi
+
 # ── monitor: end on MISSION_COMPLETE/FAILED, dead stack, or RUN_MAX ─────────
 SECONDS=0
 while [ "$SECONDS" -lt "$RUN_MAX" ]; do
