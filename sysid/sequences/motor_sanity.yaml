@@ -1,0 +1,34 @@
+# Post-smoke MDD3A sanity: every motor in order 0-5, forward 3 s then
+# reverse 3 s, 2 s rest between pulses (no hard H-bridge reversals).
+# Motor map: 0=left-vertical 1=right-vertical 2=rear-left 3=front-left
+# 4=front-right 5=rear-right. Both directions per motor = both halves of
+# each MDD3A channel. Bench: props CLEAR, battery fresh, hand on Ctrl-C.
+name: motor_sanity
+mode: thrust
+max_abs: 35.0
+steps:
+  - {dur: 3.0, thrust: [0, 0, 0, 0, 0, 0], label: baseline}
+  - {dur: 3.0, thrust: [30, 0, 0, 0, 0, 0], label: t0-fwd}
+  - {dur: 2.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 3.0, thrust: [-30, 0, 0, 0, 0, 0], label: t0-rev}
+  - {dur: 2.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 3.0, thrust: [0, 30, 0, 0, 0, 0], label: t1-fwd}
+  - {dur: 2.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 3.0, thrust: [0, -30, 0, 0, 0, 0], label: t1-rev}
+  - {dur: 2.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 3.0, thrust: [0, 0, 30, 0, 0, 0], label: t2-fwd}
+  - {dur: 2.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 3.0, thrust: [0, 0, -30, 0, 0, 0], label: t2-rev}
+  - {dur: 2.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 3.0, thrust: [0, 0, 0, 30, 0, 0], label: t3-fwd}
+  - {dur: 2.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 3.0, thrust: [0, 0, 0, -30, 0, 0], label: t3-rev}
+  - {dur: 2.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 3.0, thrust: [0, 0, 0, 0, 30, 0], label: t4-fwd}
+  - {dur: 2.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 3.0, thrust: [0, 0, 0, 0, -30, 0], label: t4-rev}
+  - {dur: 2.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 3.0, thrust: [0, 0, 0, 0, 0, 30], label: t5-fwd}
+  - {dur: 2.0, thrust: [0, 0, 0, 0, 0, 0], label: rest}
+  - {dur: 3.0, thrust: [0, 0, 0, 0, 0, -30], label: t5-rev}
+  - {dur: 3.0, thrust: [0, 0, 0, 0, 0, 0], label: tail-zero}
