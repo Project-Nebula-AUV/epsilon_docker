@@ -1,5 +1,27 @@
 # SYSID RESUME — canonical state. Update BEFORE ending every session.
 
+2026-07-13 (smoke incident triage) — **SMOKE EVENT: sensors ALL CLEARED, two
+real findings.** Passive sweep after the electrical-tube smoke: Pi (no
+undervoltage, clean boot), ESP32+MS5837 (streaming), camera (good frames),
+all PASS. (1) **IMU "death" was NOT damage:** GPIO2/SDA1 was found re-muxed
+to output-low (wedged i2c-1, controller timeouts; BNO055 stuck on page 1
+reading id 0x0C). Cause unknown — happened 21:29-22:01 UTC while omni_control
+ran bare + user handled the sub; nothing in-repo drives BCM2 (physical header
+pin 3 = GPIO2 — a manual pinctrl probe with the wrong numbering would do it).
+FIX: pinctrl set 2 a3 + PAGE_ID=0 + soft reset -> chip 0xA0, node connects
+NDOF. If it recurs, check GPIO2 mux FIRST (pinctrl get 2,3), not the sensor.
+(2) **Thruster pin remap REVERTED (fe27f15):** the {5,6}/{23,25} m1/m5 remap
+committed from the dead-laptop session was NEVER water-verified — the morning
+session never rebuilt epsilon_control (old-pin binary flew and worked); the
+remap first compiled in tonight (plain build 20:24 UTC) and made m1/m5 drive
+each other reversed in the motor_sanity bench run ("motors switched").
+Last-night pins {17,18, 25,23, 4,14, 20,26, 9,22, 6,5} restored + rebuilt.
+OPEN: t4 (FR, pins 9,22 — unchanged by all this) reported spinning ONE
+DIRECTION ONLY — re-run motor_sanity post-revert; if it persists it is real
+MDD3A/wiring damage (the smoke suspect). motor_sanity sequence + REQUIRE_IMU=0
+knob are in git for exactly this.
+
+
 2026-07-13 (post-session) — **STALE INSTALL RECURRED + ROOT-CAUSED: colcon
 defaults were never actually wired.** A plain `colcon build` (~20:15 UTC)
 re-copied robosub+epsilon_bridge into site-packages, silently freezing the
