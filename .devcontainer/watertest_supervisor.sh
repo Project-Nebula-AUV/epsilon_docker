@@ -120,6 +120,35 @@ if [ "$ready" -ne 1 ]; then
 fi
 log "stack healthy (sensors flowing + nav/thruster nodes up)."
 
+# ── PARAMS GATE (2026-07-13) ─────────────────────────────────────────────────
+# A non-symlink `colcon build` (2026-07-09) left a stale robosub COPY in
+# site-packages: pid_params.yaml silently never loaded ("using built-in
+# defaults" in launch.log) and 4 days of control edits never ran in the water.
+# Refuse to arm unless the code we import is the live src tree AND the yaml
+# resolves. Fix when it trips:
+#   colcon build --symlink-install --packages-select robosub epsilon_bridge
+# (delete install/lib/python3.10/site-packages/{robosub,epsilon_bridge} first
+#  if they are real dirs — a copied package shadows the symlink install.)
+livecheck=$(python3 -c '
+import os
+import robosub.sub.control as c
+import epsilon_bridge.sensor_bridge as sb
+cf = os.path.realpath(c.__file__); sf = os.path.realpath(sb.__file__)
+ok = ("/src/" in cf) and ("/src/" in sf) and os.path.isfile(c._CONFIG_FILE)
+print(f"control={cf} bridge={sf} yaml={os.path.isfile(c._CONFIG_FILE)}")
+raise SystemExit(0 if ok else 1)' 2>&1) || {
+  log "!!! PARAMS GATE FAILED — running code is NOT the live src tree (stale install):"
+  log "    ${livecheck}"
+  log "!!! NOT ARMING. Rebuild with --symlink-install (see comment above), then rerun."
+  exit 1
+}
+log "params gate: live code + yaml resolvable (${livecheck})"
+if grep -q "using built-in defaults" "${RUN_DIR}/launch.log" 2>/dev/null; then
+  log "!!! PARAMS GATE: node logged 'using built-in defaults' — pid_params.yaml NOT loaded."
+  log "!!! NOT ARMING."
+  exit 1
+fi
+
 # Persistent /sub/status subscriber -> file, for discovery-free completion
 # detection (a long-lived subscriber discovers reliably where the short-lived
 # `echo --once` probe does not). The monitor greps this file, never the bus.

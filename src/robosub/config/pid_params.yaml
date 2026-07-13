@@ -12,7 +12,18 @@
 # --- Heading cascade ---
 yaw_p: 1.6            # heading error (rad) -> desired yaw rate (rad/s)
 max_yaw_rate: 0.5     # rad/s cap on the desired rate
-yaw_rate_p: 2.5       # rate error (rad/s) -> yaw command
+# 2026-07-13 (first runs with params actually LIVE): yaw_rate_p 2.5 was a
+# ~2.5 Hz LIMIT CYCLE — gyro_z p50 0.6 rad/s x 2.5 = cmd pinned +-1 (87-90%
+# duty, 5.3 sign flips/s on all 4 corner motors). Same disease as roll: deep
+# saturation + loop delay. Measured consequences: visible yaw rocking,
+# sideways drift (rectified fwd/rev-asymmetric thrust of full-scale flipping
+# corners — commanded sway/surge were exactly 0), turn settle scatter
+# (+3 deg run A / -9 deg run B: the 2.5 deg settle gate latches on limit-
+# cycle noise). Same cure as roll: leave the saturated regime. 0.7 keeps
+# typical cmds linear (calm gz ~0.2 -> cmd 0.14) and still turns hard
+# (rate err 0.5 -> cmd 0.35, ~2 N*m yaw torque, plenty). If dither persists,
+# next single change = LPF gyro_z or a small rate-error deadband, NOT gain.
+yaw_rate_p: 0.7       # rate error (rad/s) -> yaw command
 
 # --- Visual servos (pixel error normalized by half image width) ---
 pixel_yaw_p: 0.7
@@ -36,8 +47,40 @@ buoyancy_ff: 0.12     # steady heave vs net buoyancy at ~1 m depth. Under the
                       # but 6.5 N under the calibrated plant -> depth stall.
 
 # --- Roll ---
-roll_p: 2.3           # roll error (rad)
-roll_d: 2.0           # gyro_x (rad/s)
+# 2026-07-12: roll rocked ~the SAME across 4 configs (cap 0.4->0.15, roll_d
+# 3.0->5.5). Cause: roll_d * roll_rate (~1.5-2 rad/s during the oscillation)
+# was 8-11 -- ~20x over the cap -> the command was PINNED at +-cap every tick
+# = bang-bang. Bang-bang on this underdamped hull is a limit cycle whose
+# amplitude barely depends on gain, hence "same every config." FIX: leave the
+# saturated regime -> LOW roll_d so the command stays linear and applies
+# graded damping. This adds ~c=1.1 N*m*s/rad (zeta ~0.19 -> ~0.65). Cap held
+# at the proven-safe 0.4 (3 water runs today, no incident); mild peak-rate
+# saturation is fine. If it STILL rings, next step is actuator fwd/rev
+# asymmetry compensation in the mixer, not more gain.
+roll_p: 0.30          # roll error (rad) -> cmd. Modest: natural righting
+                      # (3.3 N*m/rad, strong) already restores level; control
+                      # mainly adds the DAMPING nature lacks. 0.30*0.5rad=0.15
+                      # << cap, so position never bang-bangs (near-tip mode).
+roll_d: 0.20          # gyro_x (rad/s) -- LINEAR damping now (was 5.5 = deep
+                      # bang-bang). 0.20*2 rad/s peak ~ 0.4 -> just kisses cap
+                      # at the fastest, proportional everywhere below.
+roll_authority_max: 0.4  # HARD cap: 0.4*full ~= 2.2 N*m < 3.3 N*m righting,
+                      # so roll cmd can never out-torque the hull. Matches
+                      # control.py's code default; pinned here for visibility.
+
+# Roll PULSE-and-COAST (2026-07-12): fire a fixed pulse to oppose the roll,
+# then force the vertical motors off so the hull's natural righting + drag
+# settle it, instead of a continuous command re-pumping the oscillation.
+# roll_p/roll_d above are the switching signal. Set enable 0 -> linear law.
+# Roll DEADZONE (2026-07-12): no roll differential while |roll error| < this;
+# vertical motors run even depth-only pulses, natural righting settles small
+# tilt. Roll stabilization engages only OUTSIDE the band (arrests big excursions).
+roll_deadband_deg: 35.0
+roll_pulse_enable: 0
+roll_pulse_power: 0.35     # pulse magnitude (<= roll_authority_max)
+roll_pulse_on_s: 0.30      # pulse duration
+roll_pulse_off_s: 0.80     # FORCED coast after each pulse (raise to settle more)
+roll_pulse_deadband: 0.05  # switching-signal deadband -> coast when small
 
 # --- Vision thresholds (contour area, SIM-REFERENCE 320x240 pixels;
 #     Vision.update scales by actual image area — hardware 640x320 = 2.67x) ---

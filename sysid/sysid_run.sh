@@ -87,6 +87,16 @@ source /opt/ros/humble/setup.bash
 source "${WS}/install/setup.bash"
 set -u
 
+# WiFi-INDEPENDENT ROS (same fix as watertest.sh, 2026-07-09): force DDS
+# discovery off the WiFi interface so it survives the sub submerging.
+export ROS_LOCALHOST_ONLY=1
+# DDS multicast intake freeze (2026-07-12, this venue 192.168.0.x): even with
+# ROS_LOCALHOST_ONLY=1, loopback multicast discovery silently stopped IMU/
+# depth/camera intake 10-15s into 4/5 bench runs here. Force loopback-UNICAST
+# instead (verified 2x, 195s rate-perfect). No laptop-side ros2 echo/rviz
+# visibility with this set -- watch RUN_DIR CSVs / this script's own log.
+export FASTRTPS_DEFAULT_PROFILES_FILE=/home/robosub/robosub_ws/sysid/lo_unicast.xml
+
 
 MODE=dry; [ "$LIVE" = "1" ] && MODE=live; [ "$HAND" = "1" ] && MODE=hand
 RUN_ID="$(date +%Y%m%d-%H%M%S)-${NAME}-${MODE}"

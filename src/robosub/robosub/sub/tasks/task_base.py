@@ -61,10 +61,17 @@ class Task:
         self.current_subtask_index = 0
         self.search_direction = (search_direction if search_direction is not None
                                  else self._ctor_search_direction)
+        # target_depth enters the context ONLY when the task defines one
+        # (subclasses set it in their own reset). A bare Task([...]) wrapper
+        # must NOT inject a depth: the old 0.1 default sent the vehicle to the
+        # surface for the whole wrapped phase (2026-07-13 holdtest: the 90 deg
+        # turn ran at 0.1 m). Absent key = subtasks hold current depth.
         self.context = {
-            'target_depth': getattr(self, 'target_depth', 0.1),
             'search_direction': self.search_direction,
         }
+        _td = getattr(self, 'target_depth', None)
+        if _td is not None:
+            self.context['target_depth'] = _td
         self._timeout_count = 0
         for st in self.subtasks:
             st.reset()

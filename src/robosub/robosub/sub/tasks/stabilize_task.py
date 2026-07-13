@@ -21,8 +21,11 @@ class StabilizeTask(Task):
     def __init__(self, duration: float = 3.0,
                  speed_threshold: float = 0.05,   # accepted for compatibility
                  target_depth: float = 1.0,
-                 settle_grace: float = 30.0):
+                 settle_grace: float = 30.0,
+                 surge: float = 0.0):
         self.target_depth = target_depth
+        # surge>0 => hold depth+heading WHILE driving forward (straight-line test)
+        self.surge = surge
         self.duration = duration
         # Complete after duration+settle_grace EVEN IF not settled, so a run
         # can never hang holding forever (2026-07-09: an unstable roll kept
@@ -48,7 +51,8 @@ class StabilizeTask(Task):
         if self._heading is None:
             self._heading = sensors.heading
         self._timer += dt
-        cmds = sub.ctrl.hold(sensors, dt, self.target_depth, self._heading)
+        cmds = sub.ctrl.hold(sensors, dt, self.target_depth, self._heading,
+                             surge=self.surge)
         if self._timer >= self.duration:
             if sub.ctrl.is_settled(sensors, self.target_depth):
                 return TaskStatus.COMPLETED, cmds

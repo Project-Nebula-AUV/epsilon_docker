@@ -58,6 +58,17 @@ class SensorBridge(Node):
         # trim (the ~0.6 heave the integrator can no longer supply) is handled by
         # thruster_bridge's heave_bias param. -1.0 disables (real /depth passthrough).
         self.synthetic_depth = float(self.declare_parameter('synthetic_depth', -1.0).value)
+        # /depth multiplicative correction. KEEP 1.0 until a real known-depth
+        # measurement exists (taped mark / weighted line, static hold, compare).
+        # 2026-07-13: the 1.4 eyeball value from the 2026-07-12 poolside
+        # cross-check was retired UNUSED (it never actually deployed - the
+        # running bridge was a stale install). The eyeball data is internally
+        # inconsistent: in the 4 ft (1.22 m) pool the "estimated true depth"
+        # was 1.52 m - deeper than the pool. Above-water depth guesses suffer
+        # refraction (objects read ~25-30% shallow) and hull-bottom-vs-sensor
+        # offset; and every valid calibration (water-1 fits, sim plant, depth
+        # gains) was built on RAW depth, so scaling also rescales loop gain.
+        self.depth_scale = float(self.declare_parameter('depth_scale', 1.0).value)
         # /sensors/depth health: False if depth_fusion flags stale OR no /depth
         # has arrived within this window (fusion node died entirely). In
         # synthetic-depth mode the constant is trustworthy by construction, so
@@ -99,7 +110,9 @@ class SensorBridge(Node):
         mode = ('capture@boot %.1fs' % self.level_capture_secs
                 if self.capture_level_on_start else 'static %.2f deg' % self.roll_offset_deg)
         depth_mode = ('SYNTHETIC %.2f m (depth sensor bypassed)' % self.synthetic_depth
-                      if self.synthetic_depth >= 0.0 else 'passthrough /depth')
+                      if self.synthetic_depth >= 0.0
+                      else ('passthrough /depth' if self.depth_scale == 1.0
+                            else 'SCALED /depth x%.2f' % self.depth_scale))
         self.get_logger().info(
             'sensor_bridge up (roll-rate=raw.y, yaw-rate=raw.z; roll zeroing: %s; depth: %s)'
             % (mode, depth_mode))
@@ -148,7 +161,7 @@ class SensorBridge(Node):
         if self.synthetic_depth >= 0.0:
             return  # depth sensor bypassed; on_synthetic_depth_timer publishes instead
         self._last_depth_t = self.get_clock().now()
-        self.pub_depth.publish(Float32(data=float(msg.data)))
+        self.pub_depth.publish(Float32(data=float(msg.data) * self.depth_scale))
 
     def on_synthetic_depth_timer(self):
         self.pub_depth.publish(Float32(data=float(self.synthetic_depth)))

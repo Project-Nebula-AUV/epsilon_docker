@@ -66,6 +66,28 @@ _DEFAULTS = {
     'roll_authority_max': 0.4,  # HARD cap on roll cmd: 0.4*full ~= 2.2 N*m <
                              # 3.3 N*m righting, so control can never out-torque
                              # the hull and flip it (the water-1 near-tip mode).
+    # --- roll PULSE-and-COAST (2026-07-12) ---
+    # Continuous roll (linear OR bang-bang) kept a hard limit cycle across every
+    # gain set. Switch STRUCTURE: fire a fixed pulse to oppose the roll, then
+    # FORCE the motors off (coast) so the hull's natural righting (3.3 N*m/rad)
+    # + water drag remove energy instead of the controller re-pumping the
+    # underdamped mode every tick. roll_p/roll_d above are reused as the
+    # switching signal (sign = which way to pulse; magnitude vs deadband =
+    # whether to fire at all). Set roll_pulse_enable 0 to fall back to linear.
+    # --- roll DEADZONE (2026-07-12) ---
+    # Continuous AND pulse roll both kept a limit cycle around level. New
+    # mechanism: do NOTHING while |roll error| < roll_deadband_deg -- the two
+    # vertical motors run EVEN (common-mode) depth pulses only, no roll
+    # differential, and the hull's strong natural righting (3.3 N*m/rad)
+    # settles the small tilt. Roll control ENGAGES only outside the band, to
+    # arrest a big excursion and drive it back in -- so it never rings around
+    # the setpoint (it disengages before reaching it).
+    'roll_deadband_deg':   35.0,
+    'roll_pulse_enable':   0,
+    'roll_pulse_power':    0.35,  # pulse magnitude (<= roll_authority_max)
+    'roll_pulse_on_s':     0.30,  # pulse duration
+    'roll_pulse_off_s':    0.80,  # FORCED coast after each pulse (the key term)
+    'roll_pulse_deadband': 0.05,  # |switching signal| below this -> coast
     # --- vision thresholds (consumed by Submarine, kept in one file) ---
     'min_pixels_for_detection': 20,
     'min_gate_pixels': 50,
@@ -100,6 +122,9 @@ class MotionController:
     def reset(self):
         self._depth_i = 0.0
         self._depth_target_prev: Optional[float] = None
+        self._roll_pulse_phase = 'coast'
+        self._roll_pulse_timer = 0.0
+        self._roll_pulse_sign = 0.0
         self.reset_pixel_servo()
 
     # ------------------------------------------------------------------
@@ -154,11 +179,47 @@ class MotionController:
             - sensors.velocity_z * self.p['depth_d'],
             -1.0, 1.0))
 
-    def _roll_level(self, sensors: SensorSuite, target_deg: float = 0.0) -> float:
-        err = math.radians(angle_diff(target_deg, sensors.roll))
+    def _roll_level(self, sensors: SensorSuite, dt: float,
+                    target_deg: float = 0.0) -> float:
+        err_deg = angle_diff(target_deg, sensors.roll)
+        # DEADZONE: within +/- roll_deadband_deg, command NO roll differential
+        # so the vertical pair runs even depth-only pulses (vp == vs) and the
+        # hull's natural righting settles the tilt. Reset any pulse state so a
+        # later out-of-band engage starts fresh.
+        if abs(err_deg) < self.p.get('roll_deadband_deg', 35.0):
+            self._roll_pulse_phase = 'coast'
+            self._roll_pulse_timer = 0.0
+            return 0.0
+        err = math.radians(err_deg)
         cap = self.p.get('roll_authority_max', 1.0)
-        return float(np.clip(err * self.p['roll_p']
-                             - sensors.imu.gyro_x * self.p['roll_d'], -cap, cap))
+        # switching signal: sign = correcting direction, |.| vs deadband = fire?
+        desired = err * self.p['roll_p'] - sensors.imu.gyro_x * self.p['roll_d']
+
+        if not self.p.get('roll_pulse_enable', 0):
+            return float(np.clip(desired, -cap, cap))
+
+        # Pulse-and-coast state machine. PULSE: hold a fixed command for
+        # roll_pulse_on_s. COAST: motors off for AT LEAST roll_pulse_off_s
+        # (forced refractory), then re-fire only if still outside the deadband.
+        power = min(self.p.get('roll_pulse_power', 0.35), cap)
+        self._roll_pulse_timer = max(0.0, self._roll_pulse_timer - dt)
+
+        if self._roll_pulse_phase == 'pulse':
+            if self._roll_pulse_timer > 0.0:
+                return self._roll_pulse_sign * power
+            self._roll_pulse_phase = 'coast'
+            self._roll_pulse_timer = self.p.get('roll_pulse_off_s', 0.80)
+            return 0.0
+
+        # coast phase
+        if self._roll_pulse_timer > 0.0:
+            return 0.0  # forced coast still running
+        if abs(desired) >= self.p.get('roll_pulse_deadband', 0.05):
+            self._roll_pulse_phase = 'pulse'
+            self._roll_pulse_sign = 1.0 if desired >= 0.0 else -1.0
+            self._roll_pulse_timer = self.p.get('roll_pulse_on_s', 0.30)
+            return self._roll_pulse_sign * power
+        return 0.0
 
     # ------------------------------------------------------------------
     # Public command builders (each returns complete ThrusterCommands)
@@ -173,7 +234,7 @@ class MotionController:
         return self._mix(surge, sway,
                          self._yaw_hold(sensors, hdg),
                          self._heave(sensors, depth, dt),
-                         self._roll_level(sensors),
+                         self._roll_level(sensors, dt),
                          sensors.roll)
 
     def scan(self, sensors: SensorSuite, dt: float, depth: float,
@@ -182,7 +243,7 @@ class MotionController:
         return self._mix(surge, 0.0,
                          self._yaw_rate(sensors, yaw_rate),
                          self._heave(sensors, depth, dt),
-                         self._roll_level(sensors),
+                         self._roll_level(sensors, dt),
                          sensors.roll)
 
     def track_pixel_yaw(self, sensors: SensorSuite, dt: float, depth: float,
@@ -196,7 +257,7 @@ class MotionController:
                             -1.0, 1.0))
         return self._mix(surge, sway, yaw,
                          self._heave(sensors, depth, dt),
-                         self._roll_level(sensors),
+                         self._roll_level(sensors, dt),
                          sensors.roll)
 
     def track_pixel_sway(self, sensors: SensorSuite, dt: float, depth: float,
@@ -211,7 +272,7 @@ class MotionController:
         return self._mix(surge, sway,
                          self._yaw_hold(sensors, heading),
                          self._heave(sensors, depth, dt),
-                         self._roll_level(sensors),
+                         self._roll_level(sensors, dt),
                          sensors.roll)
 
     def roll_spin(self, sensors: SensorSuite, dt: float, depth: float,

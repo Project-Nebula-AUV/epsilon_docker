@@ -31,7 +31,8 @@ case "$TEST" in
   hold) MISSION_MODE=holdtest ; STYLE_ROLL="${STYLE_ROLL:-0}" ;;
   roll) MISSION_MODE=rolltest ; STYLE_ROLL="${STYLE_ROLL:-0}" ;;
   gate) MISSION_MODE=gate     ; STYLE_ROLL="${STYLE_ROLL:-0}" ;;
-  *) echo "TEST must be hold|roll|gate"; exit 1 ;;
+  straight) MISSION_MODE=straighttest ; STYLE_ROLL="${STYLE_ROLL:-0}" ;;
+  *) echo "TEST must be hold|roll|gate|straight"; exit 1 ;;
 esac
 NOTES="${1:-}"
 
@@ -46,6 +47,15 @@ set -u
 # service call sits pending and only completes when the sub is recovered and
 # WiFi returns (2026-07-09: "motors spin the moment it reconnects to WiFi").
 export ROS_LOCALHOST_ONLY=1
+
+# DDS multicast intake freeze (2026-07-12, this venue 192.168.0.x): IMU/depth/
+# camera topic delivery silently stopped 10-15s after launch in 4/5 bench runs
+# here, even with ROS_LOCALHOST_ONLY=1 (loopback still uses multicast
+# discovery by default -- that flag alone does not fix it). Force loopback-
+# UNICAST discovery instead (verified 2x, 195s rate-perfect on sysid_logger).
+# NOTE: confines ROS to loopback -- no laptop-side `ros2 echo`/rviz
+# visibility; watch supervisor.log / RUN_DIR CSVs instead.
+export FASTRTPS_DEFAULT_PROFILES_FILE=/home/robosub/robosub_ws/sysid/lo_unicast.xml
 
 RUN_ID="$(date +%Y%m%d-%H%M%S)-${TEST}test-water"
 RUN_DIR="${WS}/sysid/runs/${RUN_ID}"
@@ -117,7 +127,8 @@ test_depth_m: ${ROBOSUB_TEST_DEPTH:-1.2}
 notes: "${NOTES}"
 EOF
 
-GW_ARG=$([ "${GRAY_WORLD:-1}" = "1" ] && echo true || echo false)
+# comp_v5 (2026-07-13): default RAW — the retuned bands collapse under gray-world.
+GW_ARG=$([ "${GRAY_WORLD:-0}" = "1" ] && echo true || echo false)
 
 export RUN_DIR TEST MISSION_MODE STYLE_ROLL GW_ARG
 export WITH_DEPTH="${WITH_DEPTH:-true}" SYNTHETIC_DEPTH="${SYNTHETIC_DEPTH:--1.0}"
@@ -125,6 +136,8 @@ export WORLD_Z_SIGN="${WORLD_Z_SIGN:-1.0}" HEAVE_BIAS="${HEAVE_BIAS:-0.0}"
 export NO_ARM="${NO_ARM:-0}" ARM_DELAY="${ARM_DELAY:-15}"
 export READY_TIMEOUT="${READY_TIMEOUT:-45}" RUN_MAX="${RUN_MAX:-420}"
 export ROBOSUB_TEST_DEPTH="${ROBOSUB_TEST_DEPTH:-1.2}"
+export ROBOSUB_SURGE="${ROBOSUB_SURGE:-0.3}"
+export ROBOSUB_STRAIGHT_S="${ROBOSUB_STRAIGHT_S:-20}"
 export ROBOSUB_MISSION_DEPTH="${ROBOSUB_MISSION_DEPTH:-1.2}"
 export ROBOSUB_GATE_DEPTH="${ROBOSUB_GATE_DEPTH:-1.2}"
 

@@ -1,0 +1,16 @@
+# Heave direction check: quick sanity test that the vertical thrusters
+# (motors 0,1) push the expected way. NEGATIVE verticals = descend on this
+# vehicle (heave_sign=-1, confirmed via the H-series bench test). Short +
+# mild by design -- this is NOT a thrust-curve fit (see s3_heave_staircase
+# for that), just an orientation check.
+# PASS: depth_raw.csv INCREASES during down30, DECREASES during up30.
+# FAIL (investigate wiring/sign): the reverse, or no clear response.
+name: heave_check
+mode: thrust
+max_abs: 40.0
+steps:
+  - {dur: 2.0, thrust: [0, 0, 0, 0, 0, 0], label: baseline}
+  - {dur: 4.0, thrust: [-30, -30, 0, 0, 0, 0], label: down30}
+  - {dur: 3.0, thrust: [0, 0, 0, 0, 0, 0], label: pause}
+  - {dur: 4.0, thrust: [30, 30, 0, 0, 0, 0], label: up30}
+  - {dur: 2.0, thrust: [0, 0, 0, 0, 0, 0], label: tail}

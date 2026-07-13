@@ -12,8 +12,8 @@ camera_input:
 
     # ── Camera device ────────────────────────────────────────────────────
     device:   0          # /dev/videoN index
-    width:    1280
-    height:   720
+    width:    640
+    height:   320
     fps:      30.0
     frame_id: camera
 

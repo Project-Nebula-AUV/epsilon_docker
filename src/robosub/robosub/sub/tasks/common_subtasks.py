@@ -17,6 +17,7 @@ the vehicle on the half-opening's axis. Image-right ('right' side) is the
 vehicle's starboard half when square to the gate.
 """
 import math
+import os
 from typing import Dict, Any, Optional, Tuple
 
 import numpy as np
@@ -33,7 +34,12 @@ from robosub.sub.utils import angle_diff
 
 def _is_visible(vision: Vision, target_type: str) -> bool:
     if target_type == 'gate':
-        return vision.is_gate_visible()
+        # Acquisition keys on the guarded POST set, not the pair: the comp
+        # corpus shows both outer posts in frame on 1/1343 labeled frames —
+        # a pair-gated acquisition times out FAILED with near-certainty
+        # (2026-07-13 gate fix; posts-only is still W6-safe because
+        # get_gate_post_blobs carries the aspect + slalom-red exclusions).
+        return len(vision.get_gate_post_blobs()) >= 1
     if target_type == 'pole':
         return vision.is_pole_visible()
     return vision.is_gate_visible() or vision.is_pole_visible()
@@ -53,6 +59,92 @@ def gate_half_center_px(pair: Tuple[Dict, Dict], side: str) -> float:
     c_l, c_r = pair[0]['center_x'], pair[1]['center_x']
     center = (c_l + c_r) / 2.0
     return (center + c_r) / 2.0 if side == 'right' else (center + c_l) / 2.0
+
+
+# --- Gate geometry from partial views (2026-07-13, comp retune) -----------
+# The comp-venue labeled corpus shows BOTH outer posts in frame on 1 of
+# 1343 frames — the gate is seen as ONE outer post + the hanging middle
+# divider (PERCEPTION_CONTRACT.md, camerawork workspace). Everything below
+# lets the gate leg acquire/center/drive on that partial view.
+#
+# RANGE IS ORDINAL, NOT METRIC: measured on the labeled corpus, red-post
+# blobs capture only a FRACTION of the physical post's pixel extent, and
+# that fraction is unstable (0.29-0.47 for posts, 0.37-1.0 for the divider,
+# by distance bin) — an absolute range from blob height reads 2-6x far and
+# would surge the vehicle INTO the gate at close quarters. Longitudinal
+# policy therefore uses the anchor's pixel height directly (bigger =
+# closer; truncation = hard too-close), never estimated meters. The
+# 'range' field below survives ONLY for the quarter-width projection,
+# where its far-bias shrinks the offset — an error TOWARD the divider,
+# i.e. still inside the opening.
+GATE_W_M = 3.048       # 10 ft — comp spec AND the team's practice gate
+                       # (user tape-measured 2026-07-12)
+POST_H_M = 1.524       # 5 ft outer posts
+DIVIDER_H_M = 0.61     # hanging middle divider (nav pairing comment + boxes)
+# New-unit optics (bench 2026-07-12, provisional +-4 deg): HFOV 58 deg,
+# f_py/f_px = 387/580 (anisotropic 640x480->640x320 path). The SIM renders
+# square pixels at 70 deg — a sim run must set ROBOSUB_HFOV_DEG=70 and
+# ROBOSUB_FY_OVER_FX=1.0.
+HFOV_DEG = float(os.environ.get('ROBOSUB_HFOV_DEG', '58.0'))
+FY_OVER_FX = float(os.environ.get('ROBOSUB_FY_OVER_FX', '0.667'))
+
+
+def _f_px(cam_w: int) -> float:
+    return (cam_w / 2.0) / math.tan(math.radians(HFOV_DEG) / 2.0)
+
+
+def gate_geometry(vision: Vision, cam_w: int, cam_h: int,
+                  side: str) -> Optional[Dict[str, Any]]:
+    """Committed-half center + range estimate from whatever gate structure
+    is visible. Returns None when no post blob at all; 'half_x'/'range' may
+    individually be None when unresolvable. Divider identification uses the
+    same 0.55 height-ratio cutoff that excludes it from pairing (0.61 m
+    plate vs 1.524 m post). A truncated (frame-filling) anchor yields no
+    range — callers treat that as 'too close, ease back'."""
+    posts = vision.get_gate_post_blobs()
+    if not posts:
+        return None
+    tallest = max(posts, key=lambda b: b['height'])
+    talls = [b for b in posts if b['height'] > 0.55 * tallest['height']]
+    shorts = [b for b in posts if b['height'] <= 0.55 * tallest['height']]
+    divider = max(shorts, key=lambda b: b['height']) if shorts else None
+    fpx = _f_px(cam_w)
+    fpy = fpx * FY_OVER_FX
+
+    def untruncated(b):
+        return b['min_y'] > 2 and b['max_y'] < cam_h - 2
+
+    rng = None
+    if untruncated(tallest):
+        rng = POST_H_M * fpy / max(tallest['height'], 1)
+    elif divider is not None and untruncated(divider):
+        # Post fills the frame but the short divider still ranges (both
+        # estimates are far-biased — see the ORDINAL note above; used for
+        # the offset projection only).
+        rng = DIVIDER_H_M * fpy / max(divider['height'], 1)
+    too_close = ((not untruncated(tallest))
+                 or tallest['height'] >= 0.55 * cam_h)
+
+    sign = 1.0 if side == 'right' else -1.0
+    half_x = None
+    pair = vision.get_gate_pair()
+    if pair is not None:
+        half_x = gate_half_center_px(pair, side)
+    elif divider is not None and talls:
+        post = max(talls, key=lambda b: b['height'])
+        post_on_side = ((post['center_x'] > divider['center_x'])
+                        == (side == 'right'))
+        if post_on_side:
+            # visible outer post IS the committed side: half center is the
+            # divider-post midpoint directly.
+            half_x = (post['center_x'] + divider['center_x']) / 2.0
+        elif rng is not None:
+            # other half visible: the divider marks the gate center; project
+            # the committed half center a quarter-width toward our side.
+            half_x = (divider['center_x']
+                      + sign * (GATE_W_M / 4.0) * fpx / rng)
+    return {'half_x': half_x, 'range': rng, 'n_posts': len(posts),
+            'divider': divider, 'anchor': tallest, 'too_close': too_close}
 
 
 def _err_norm(px: float, cam_w: int) -> float:
@@ -295,10 +387,16 @@ class CenterOnGateHalf(Subtask):
     instance uses a tight value so the style roll starts as close to rest as
     physically knowable.
 
-    Range hold: the pair's pixel separation is a range signal; gentle surge
-    keeps it near the ~3 m standoff value, so residual closing velocity from
-    the previous task can never shrink the FOV until a post falls out of
-    frame (that was the return-gate failure mode).
+    Longitudinal policy (2026-07-13 gate fix): the anchor post's PIXEL
+    HEIGHT is the range signal, used ordinally (see the gate-geometry
+    header: blob fragmentation makes metric range 2-6x far-biased) —
+    creep forward while the anchor is small, hold inside the band, back
+    off when tall/truncated. Replaces the pair-separation servo
+    (SEP_TARGET=0.95), which was calibrated on the 74-degree lens and
+    demanded a ~5.8 m standoff on the new 58-degree unit — outside
+    detection range. Band provenance: comp-corpus anchor blobs at a
+    human-labeled 2-3 m run p50 111 px of 320 (0.35); at 1-2 m the post
+    truncates or exceeds ~0.5.
 
     Blind fallback: sway toward wherever a post is CURRENTLY visible; a
     remembered direction is only trusted briefly (a stale latched sign once
@@ -308,9 +406,9 @@ class CenterOnGateHalf(Subtask):
     ON_TIMEOUT = 'complete'   # valve: never strand the mission on centering
     BLIND_SWAY = 0.25
     SIGN_MEMORY_S = 1.5       # how long the last seen direction stays valid
-    SEP_TARGET = 0.95         # pair separation / half-width at ~3 m standoff
-    SEP_BAND = 0.28           # completion requires range inside this band
-    RANGE_GAIN = 0.6
+    H_HOLD_LO = 0.30          # anchor height/frame height: below -> creep in
+    H_TOO_CLOSE = 0.55        # above (or truncated) -> ease back
+    CREEP_SURGE = 0.15        # just above the ~0.12 quadratic-plant deadband
     TALL_POST_FRAC = 0.4      # single post taller than this frac of frame
                               # height = we are too close (blind regime)
 
@@ -343,20 +441,17 @@ class CenterOnGateHalf(Subtask):
         self._blind = 0.0
         self._sign_age = 1e9
         self._last_err_sign = 0.0
-        self._sep_prev = None
-        self._sep_rate = 0.0
         sub.ctrl.reset_pixel_servo()
 
     def execute(self, sub, dt, sensors, vision, config, context):
-        pair = vision.get_gate_pair()
         cam_w = sensors.camera_image.shape[1]
         cam_h = sensors.camera_image.shape[0]
         self._sign_age += dt
-        if pair is None:
+        geo = gate_geometry(vision, cam_w, cam_h, self.side)
+        if geo is None or geo['half_x'] is None:
             self._blind += dt
             self._ok = 0
-            posts = vision.get_gate_post_blobs()
-            if posts:
+            if geo is not None:
                 # A single visible post is ambiguous — resolve by RANGE
                 # (its apparent height). TALL post: we are too close, the
                 # opening fell off the frame edge — back away and sway away
@@ -365,7 +460,7 @@ class CenterOnGateHalf(Subtask):
                 # (One sign for both regimes ran the vehicle diagonally
                 # into the pool corner.) POST blobs only — chasing raw
                 # red_blobs steered at the 2026 red maker box (W6).
-                blob = max(posts, key=lambda b: b['area'])
+                blob = geo['anchor']
                 sign = 1.0 if blob['center_x'] > cam_w / 2 else -1.0
                 if blob['height'] > self.TALL_POST_FRAC * cam_h:
                     return SubtaskStatus.RUNNING, sub.ctrl.hold(
@@ -375,7 +470,8 @@ class CenterOnGateHalf(Subtask):
                     sensors, dt, self.target_depth, self._axis,
                     sway=-sign * self.BLIND_SWAY)
             if self._sign_age < self.SIGN_MEMORY_S and self._last_err_sign:
-                # Pair just dropped out: chase the last pixel error briefly.
+                # Bearing just dropped out: chase the last pixel error
+                # briefly.
                 return SubtaskStatus.RUNNING, sub.ctrl.hold(
                     sensors, dt, self.target_depth, self._axis,
                     sway=-self._last_err_sign * self.BLIND_SWAY)
@@ -387,30 +483,28 @@ class CenterOnGateHalf(Subtask):
             return SubtaskStatus.RUNNING, sub.ctrl.hold(
                 sensors, dt, self.target_depth, self._axis, surge=-0.2)
         self._blind = 0.0
-        err = _err_norm(gate_half_center_px(pair, self.side), cam_w)
+        err = _err_norm(geo['half_x'], cam_w)
         if abs(err) > 0.02:
             self._last_err_sign = math.copysign(1.0, err)
             self._sign_age = 0.0
-        sep = abs(pair[1]['center_x'] - pair[0]['center_x']) / (cam_w / 2.0)
-        if self._sep_prev is not None and dt > 0:
-            self._sep_rate += 0.3 * ((sep - self._sep_prev) / dt
-                                     - self._sep_rate)
-        self._sep_prev = sep
-        # Caps sized for the quadratic plant: below ~0.12 normalized a
-        # corner command produces near-zero force (deadband), so the old
-        # ±0.15/0.2 range-hold could not actually move the vehicle.
-        surge = float(np.clip((self.SEP_TARGET - sep) * self.RANGE_GAIN,
-                              -0.35, 0.25))
+        # Ordinal height-band standoff (see class doc): the anchor is a real
+        # outer post whenever half_x resolved.
+        h_frac = geo['anchor']['height'] / float(cam_h)
+        if geo['too_close']:
+            surge = -0.2
+        elif h_frac < self.H_HOLD_LO:
+            surge = self.CREEP_SURGE
+        else:
+            surge = 0.0
         cmds = sub.ctrl.track_pixel_sway(sensors, dt, self.target_depth,
                                          err, self._axis, surge=surge)
         tol = self.tol_px / (cam_w / 2.0)
-        # Complete only truly settled on ALL knowable axes: pixel error and
-        # rate (lateral), range inside the standoff band and range-rate
-        # quiet (longitudinal) — a completion while the range-hold was still
+        # Complete only truly settled on the knowable axes: pixel error and
+        # rate (lateral), anchor inside the standoff height band and not
+        # commanding surge (longitudinal) — a completion while still
         # surging once sent a roll segment off with forward velocity.
         if (abs(err) < tol and abs(sub.ctrl.pixel_rate()) < self.rate_tol
-                and abs(sep - self.SEP_TARGET) < self.SEP_BAND
-                and abs(self._sep_rate) < 0.05):
+                and surge == 0.0):
             self._ok += 1
             if self._ok >= self.hold_ticks:
                 return SubtaskStatus.COMPLETED, cmds
@@ -424,9 +518,11 @@ class CenterOnGateHalf(Subtask):
 
 class DriveThroughGate(Subtask):
     """Drive the committed half-opening: surge with the sway servo trimming
-    onto the half-center while both posts are visible; once the gate leaves
-    the field of view (close-in), hold the axis and surge a fixed clearance
-    time to carry the vehicle through and out the far side."""
+    onto the half-center while gate structure is visible (pair, or one
+    post + divider — the comp-typical view, 2026-07-13 gate fix); once the
+    gate leaves the field of view (close-in), hold the axis and surge a
+    fixed clearance time to carry the vehicle through and out the far
+    side."""
     ON_TIMEOUT = 'complete'
 
     def __init__(self, side: str = 'right', surge_power: float = 0.55,
@@ -449,12 +545,13 @@ class DriveThroughGate(Subtask):
         sub.ctrl.reset_pixel_servo()
 
     def execute(self, sub, dt, sensors, vision, config, context):
-        pair = vision.get_gate_pair()
-        if pair is not None:
+        cam_w = sensors.camera_image.shape[1]
+        cam_h = sensors.camera_image.shape[0]
+        geo = gate_geometry(vision, cam_w, cam_h, self.side)
+        if geo is not None and geo['half_x'] is not None:
             self._seen = True
             self._lost_t = None
-            cam_w = sensors.camera_image.shape[1]
-            err = _err_norm(gate_half_center_px(pair, self.side), cam_w)
+            err = _err_norm(geo['half_x'], cam_w)
             return SubtaskStatus.RUNNING, sub.ctrl.track_pixel_sway(
                 sensors, dt, self.target_depth, err, self._axis,
                 surge=self.surge)

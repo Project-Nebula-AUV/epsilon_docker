@@ -36,8 +36,9 @@
 # still added open-loop if you set it, and is the primary hold in the
 # WITH_DEPTH=false fallback).
 #
-# Camera color: GRAY_WORLD=1 (default) software-neutralizes the OV9782 warm tint
-# so the red gate / white buoy thresholds read true colors. Set GRAY_WORLD=0 for raw.
+# Camera color: GRAY_WORLD=0 (default since comp_v5, 2026-07-13) — the retuned
+# HSV bands are measured on RAW output and COLLAPSE under gray-world.
+# Set GRAY_WORLD=1 only to reproduce pre-comp_v5 behavior.
 # =============================================================================
 set -u
 
@@ -48,7 +49,7 @@ SYNTHETIC_DEPTH="${SYNTHETIC_DEPTH:--1.0}"  # -1.0 = real depth; >=0 = constant 
 WORLD_Z_SIGN="${WORLD_Z_SIGN:-1.0}"         # depth_fusion vertical sign (see hardware.launch.py)
 STYLE_ROLL="${STYLE_ROLL:-720}"             # deg of barrel roll before the gate (prequal); 0 = off
 ARM_DELAY="${ARM_DELAY:-10}"                # seconds between READY and arming
-GRAY_WORLD="${GRAY_WORLD:-1}"               # 1 = software-neutralize the camera warm tint; 0 = raw
+GRAY_WORLD="${GRAY_WORLD:-0}"               # 0 = raw (REQUIRED by comp_v5 bands); 1 = legacy gray-world
 READY_TIMEOUT="${READY_TIMEOUT:-45}"        # seconds to wait for the stack to become healthy
 
 # launch wants a bool string for the camera param

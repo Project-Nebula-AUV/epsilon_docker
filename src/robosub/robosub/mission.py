@@ -57,6 +57,22 @@ def create_mission():
             ShutdownTask(),
         ]
 
+    if mode == 'straighttest':
+        # Closed-loop STRAIGHT SHOT: settle, then drive forward at fixed surge
+        # while the compass holds the heading captured at the start and the
+        # depth loop holds depth. Tests stabilization UNDER forward motion
+        # (does it track straight / veer / porpoise) -- unlike the open-loop
+        # s5t sysid transit, which has no heading hold.
+        surge = float(os.environ.get('ROBOSUB_SURGE', '0.3'))
+        run_s = float(os.environ.get('ROBOSUB_STRAIGHT_S', '20'))
+        return [
+            StabilizeTask(duration=15.0, target_depth=test_depth),
+            StabilizeTask(duration=run_s, target_depth=test_depth, surge=surge),
+            StabilizeTask(duration=5.0, target_depth=test_depth),
+            StabilizeTask(duration=2.0, target_depth=SURFACE_DEPTH),
+            ShutdownTask(),
+        ]
+
     if mode == 'rolltest':
         # Style-roll controller checkout (physics proven by S9): settle,
         # one 360, re-level, re-hold, surface. Roll subtask times out

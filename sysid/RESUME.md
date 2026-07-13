@@ -1,5 +1,111 @@
 # SYSID RESUME — canonical state. Update BEFORE ending every session.
 
+2026-07-13 (latest) — **YAW LIMIT CYCLE DEAD (yaw_rate_p 0.7 verified in water)
++ FIRST CLOSED-LOOP STRAIGHT SHOTS ANALYZED.** Runs: 075059 hold, 080244
+straight@0.3, 080624 straight@0.8-depth1.0 (floor-grind, aborted), 081040
+(power loss at launch, no data), 081327 straight@0.8 (the good one).
+- HOLD: heading std 0.6° (was 2.9), gyro_z p50 0.01 rad/s (was 0.60), yaw
+  duty 0% (was 90%), roll std 0.6°, depth 0.81±0.03. The "slight up drift" =
+  depth integrator bleeding the initial-dive overshoot (0.93→0.81 over 50 s,
+  converged) — expected, not a defect. 75 s MISSION_COMPLETE.
+- STRAIGHT@0.8 (081327): all four corners DO carry surge (RL −88 FL −91
+  FR +66 RR +65 PWM; 2% saturation; sway cmd 0.000; yaw quiet). Left pair
+  runs REVERSE by mount geometry. Two measured defects:
+  (1) HEADING DROOP: sub parks ~+7° right-of-line during thrust — steady
+      asymmetry torque needs yaw cmd −0.14; P-only cascade err_ss =
+      0.14/(1.6·0.7) = 7.2° ✓ exact. Gyro-integration confirms PHYSICAL
+      rotation (not compass distortion).
+  (2) LEFT DRIFT: residual sway force from per-motor fwd/rev thrust
+      inequality (uncommanded, unsensed). Both fix at the root with a
+      PER-MOTOR FWD/REV COMPENSATION table in thruster_bridge from a bench
+      bollard test (log battery_v!). Stopgap: yaw feedforward −0.175·surge.
+- SPEED: 0.3 surge = corner PWM 24–35 ≈ prop deadband → ~1 m/20 s (useless;
+  quadratic props ⇒ surge floor ~0.5). 0.8 surge ≈ est 20 N forward model
+  but observed only ~3 m/20 s (~0.2 m/s) — thrust model (fit on the VERTICAL
+  pair, water-1) is optimistic for corners; reverse-pair efficiency + likely
+  battery sag are prime suspects. Bollard test resolves quantitatively.
+- STRAIGHT2 LESSON (target 1.0 in the shallow end): depth below the physical
+  floor ⇒ verticals pinned −1.00 grinding the floor for 38 s, settle gate
+  never passes, mission stuck until human abort. TODO: depth-unreachable
+  valve in StabilizeTask (vert saturated + no progress ≥10 s → hold current
+  depth + flag). Known-depth scale ritual STILL OWED (under-read makes
+  floor-relative targets dangerous).
+- 081040 "crash": abrupt power loss during stack launch (supervisor.log
+  NUL-filled, CSVs empty). Cause unconfirmed (battery sag under launch
+  spike suspected). straight4 ran fine right after. Start logging battery_v
+  in meta (EDIT ME field exists).
+
+
+2026-07-13 (later) — **FIRST LIVE-PARAMS WATER RUNS: ROLL SOLVED. Yaw limit
+cycle = the last defect; yaw_rate_p 2.5→0.7 applied (.pre-yawcalm.20260713).**
+Runs 20260713-071305 (shoves) + 20260713-071652 (no shoves; power cut 3 s
+into the FINAL SURFACE PHASE — status.stream lost to buffering, CSVs fine):
+- ROLL: deadzone + linear 0.30/0.20 WORK. Settled std 1.3–2.1°, vert
+  differential duty 0–1.8% (0.0% inside |roll|<30°). Shoves to 34.5° and
+  78.8° arrested and back <6° in 2.3/3.4 s, no re-ring. Limit cycle GONE.
+- DEPTH: 0.79–0.81 indicated (±0.01–0.07) vs 0.8 target — ff stall gone;
+  held 0.77–0.84 THROUGH the turn (turn-depth fix verified). Run A
+  MISSION_COMPLETE in 84 s (was 175 s) — settle gates latch on schedule.
+- BUT the user saw the hull near the bottom of the 4.5 ft (1.37 m) section
+  at 0.8 indicated → the sensor under-read is REAL (~×1.2–1.4). Next
+  session: KNOWN-DEPTH ritual — static hold at 0.8 indicated, tape from
+  waterline to the SENSOR PORT, scale = true/indicated; set depth_scale to
+  the measured value. NOTE scale k also multiplies depth-loop gain by k —
+  recheck hold quality after applying.
+- YAW: ~2.5 Hz limit cycle measured (gyro_z p50 0.6 rad/s × yaw_rate_p 2.5
+  → cmd pinned ±1, 87–90% duty, 5.3 sign flips/s, all 4 corners). It caused
+  ALL THREE user observations: visible yaw rocking; heavy SIDEWAYS DRIFT
+  (rectified fwd/rev-asymmetric thrust of full-scale flipping corners —
+  commanded sway/surge were exactly 0.000); turn settle scatter (+3° run A,
+  −8.7° run B — the 2.5° settle gate latches on limit-cycle noise, then the
+  next StabilizeTask captures the wobbled heading). Fix mirrors the roll
+  cure (leave saturation): yaw_rate_p 0.7, verified loaded.
+- NEXT RUN: same holdtest @0.8. Expect: no visible yaw rock (corner duty
+  <10%), drift mostly gone, turn parks ±3°, ~84 s total. If dither
+  persists: LPF gyro_z or small rate-error deadband — NOT more gain moves.
+
+
+2026-07-13 — **STALE-INSTALL INCIDENT FOUND + FIXED: NOTHING TUNED SINCE
+2026-07-09 EVER RAN IN THE WATER.** Tonight's hold+90 run (20260713-061539)
+exposed it: launch.log "pid_params.yaml not found, using built-in defaults".
+- Root cause: the 2026-07-09 ~19:30 UTC colcon build was a plain COPY build
+  (not --symlink-install). Since then the runtime was frozen: pid_params.yaml
+  NEVER loaded (built-in defaults ran: roll_p 0.6 / roll_d 3.0 / buoyancy_ff
+  0.61), control.py deadzone/pulse NEVER installed, sensor_bridge depth_scale
+  NEVER installed. ALL 2026-07-12 roll-tuning water conclusions are VOID —
+  the four "configs" were the same frozen controller. The roll deadzone has
+  never actually been water-tested.
+- Tonight's data confirms: roll ±25-40° @ ~2.6 s the whole run = the old
+  saturated bang-bang limit cycle (vert differential pinned ±0.4 cap 82%
+  duty; 85% even at |roll|<20° → no deadzone in the loop); yaw rate loop
+  saturated by rock-coupled gyro_z (p50 0.54 rad/s; 62% of samples) → all 4
+  horizontal motors slamming ±100% at the rock period = the heavy drift +
+  battery burn; depth held 0.94 m raw ±0.008 vs 0.8 target = the known
+  ff=0.61 integrator-clamp stall.
+- Near-surfacing DURING the 90° turn = mission bug, not yaw: task_base.py
+  injected context target_depth **0.1 m** for bare Task([...]) wrappers, so
+  the turn phase held 0.1 m BY COMMAND. FIXED (.pre-turndepth.20260713):
+  bare wrappers no longer inject a depth; subtasks hold current depth.
+- REBUILT robosub+epsilon_bridge with --symlink-install (stale site-packages
+  copies deleted first — a copied package SHADOWS the symlink install; as-ran
+  code preserved: sysid/installed-as-ran-20260713.tgz). VERIFIED: imports
+  resolve to /src/, yaml loads (INFO line in launch.log), live gains 0.30 /
+  0.20 / deadband 35 / ff 0.12 / depth 3.0/0.15/2.0. Bench NO_ARM holdtest
+  PASSED (run 20260713-070149).
+- NEW PARAMS GATE in watertest_supervisor.sh (.pre-paramsgate.20260713):
+  refuses to ARM unless imports resolve to /src/ AND the yaml resolves AND
+  launch.log has no "using built-in defaults". Trips loudly with fix text.
+- depth_scale 1.4 RETIRED UNUSED → 1.0 (.pre-scalerevert.20260713): the
+  eyeball evidence is internally inconsistent (4 ft pool with "true depth
+  1.52 m"), above-water estimates suffer refraction + sensor-vs-hull offset,
+  and every valid calibration (water-1 fits, sim plant, depth gains) is on
+  RAW depth. Known-depth ground-truth ritual still owed before any scale.
+- NEXT WATER RUN: same holdtest = the FIRST live test of deadzone + linear
+  low-gain roll (0.30/0.20) + W6 depth gains. If rocking persists while the
+  roll differential stays quiet, the remaining pump is the YAW loop
+  (gyro_z-coupled) — then cap/LPF yaw as the next single change.
+
+
 2026-07-09 (later) — **PHASE 0 BENCH PREP FOR THE COURSE ARC DONE** (plan:
 2 water sessions to full-course auton; laptop plan file curried-wibbling-
 toucan). READ **sysid/SESSION1_RUNBOOK.md** for the next water session
@@ -510,3 +616,86 @@ all values live in sim_calibration.yaml (overlay-verified, 16 params):
 Disarmed default · arm service gate · watchdog-to-zero (both hops) · countdown
 before power · fail-safe-to-surface · user executes all water runs · no commits ·
 no devcontainer up.
+
+## 2026-07-12 — PERCEPTION ARC SPLIT OUT (camera + object detection)
+
+Per the 2026-07-11 architecture decision (layers isolated; sim = control-only),
+camera/CV tuning now lives on the laptop at /home/evan/workspaces/camerawork/
+(start: CLAUDE.md + CONTEXT.md there; S10 analysis kit moved to its analysis/).
+Origin handoff: ~/.claude/plans/handoff-camera-vision-tuning.md (laptop).
+Resolved: launch-time gray_world — launch files default false but motortest.sh/
+watertest.sh default GRAY_WORLD=1 (nav flies gray-world ON); sysid_run.sh
+defaults 0 (S10 corpus is raw). Camera module being REPLACED 2026-07-12 (pink
+edge cast expected gone); new-unit bench characterization is the perception
+arc P0 — do not trust old-unit constants (cast map, blur, prop HSV) until then.
+Control-side heads-up for the contract: real gate detection (old cam, untuned)
+died by ~3 m vs the 4-5 m acquisition standoff control assumes.
+
+## 2026-07-12 — DDS INTAKE FREEZE at wlan-hostile venues (perception arc finding)
+
+At the 192.168.0.x venue, sysid_logger silently lost ALL topic intake
+(imu+camera+depth) 10-15 s after launch in 4 of 5 bench HAND runs — process
+alive, publishers alive, CSVs/jpgs just stop. Cause consistent with venue
+AP/Wi-Fi dropping multicast (DDS liveliness); ROS_LOCALHOST_ONLY=1 does NOT
+fix it on Humble/FastDDS 2.6. FIX (verified 2x, 195 s rate-perfect): launch
+with FASTRTPS_DEFAULT_PROFILES_FILE=/home/robosub/robosub_ws/sysid/lo_unicast.xml
+(loopback-unicast, no multicast; file added beside this note). CONTROL-ARC
+HEADS-UP: motortest.sh/watertest.sh have no such profile — at a venue like
+this, nav sensor intake could freeze the same way mid-run. Symptom check:
+watch sysid_logger "logged:" counters for 60 s after launch. Note the
+profile confines ROS to loopback (laptop-side echo/rviz will not see the
+graph). Full evidence: laptop camerawork workspace CONTEXT.md 5b.
+
+## 2026-07-12 — REPLACEMENT CAMERA LENS IS NARROWER (perception arc P0)
+
+Bench-measured: new camera HFOV 58 deg +/- 4 (old unit was 74). ~25% less
+lateral coverage — affects search patterns / gate acquisition geometry.
+Upside: sharper lens (blur sigma ~2 px vs 3.5-4) + more px per prop:
+poles should resolve to ~5 m vs old ~3 m. Pink edge cast GONE (verified,
+white target). Capture resolution now 640x480->640x320 (FOV unchanged by
+that change). Constants + evidence: camerawork workspace CONTEXT.md 2b +
+analysis/reports/p0_close_out.md.
+
+2026-07-13 — comp_v5 VISION RETUNE LANDED (user-approved). Bands re-aimed
+at measured comp-water prop colors (red props render magenta; white PVC
+renders pale blue), magenta-zone post guards, morph close, pole aspect
+floor. Changed: src/robosub/robosub/sub/{config,vision,data_structures}.py
++ GRAY_WORLD default 1->0 in .devcontainer/{motortest,watertest}.sh —
+the new bands are RAW-only. .pre-comp_v5.20260713 backups beside each.
+CORRECTION to the entry above: "pink edge cast GONE" was FALSIFIED on
+comp water — the cast is in the shared housing/dome optics (gain map
+corr +0.99 with the old unit), left-edge R/G 2.30. Nav-facing summary:
+camerawork workspace PERCEPTION_CONTRACT.md; evidence
+analysis/reports/{p4_retune_delta,report2_landed_*}.
+
+2026-07-13 (later) — loop2 gatelet update LANDED (user-approved).
+Gatelet pairing envelope re-derived from human boxes (old one assumed
+1.3 m poles — they are 0.914 m; it rejected 74% of TRUE pairs) + marker
+V floor 85->75. Comp-corpus gatelet recall ~tripled (33/25/33/62% by
+distance bin). Changed: src/robosub/robosub/sub/{config,data_structures}.py
+(.pre-loop2.20260713 backups). Contract updated in camerawork workspace:
+gatelet channel now usable for slalom steering WITH temporal smoothing;
+best_pole remains untrusted (16.6% FP on comp empties).
+
+2026-07-13 (final) — gatelet sep floor 0.5->0.4 landed (user-approved;
++6 pts gatelet recall at 1-2 m, zero FP cost; .pre-seplo04.20260713
+backup on data_structures.py). Offline tuning is now at its measured
+ceiling — next CV gains come from the exposure A/B (camerawork
+HUMAN_TASKS 7c) + fresh capture/labels. Deployed gatelet contract:
+34/31/34/62% by distance bin, FP 1.7%.
+
+2026-07-13 (gate nav fix, user-authorized) — GATE LEG REWORKED to match
+the comp perception reality (both outer posts co-visible on 1/1343
+labeled frames): acquisition keys on POSTS not the pair; new
+gate_geometry() steers on one-post+divider bearings; standoff is an
+ORDINAL height band (metric range measured 2-6x far-biased — rejected).
+SEP_TARGET/SEP_BAND removed. Changed: sub/tasks/common_subtasks.py
+(.pre-gatefix.20260713). SIM VERIFIED read-only: gate + FULL course
+complete post-change (headless run, calibrated physics + live pids).
+CONTROL ARC NOTES: (1) sim runs need ROBOSUB_HFOV_DEG=70 and
+ROBOSUB_FY_OVER_FX=1.0 (nav optics defaults are hardware); (2) marker
+band is comp-water blue-white — sim vision checks need MARKER pointed
+back at WHITE_HSV_RANGE; (3) evidence + handoff detail: camerawork
+analysis/reports/p7_gate_fix.md. AUTON: slalom GO (comp venue), gate GO
+pending water validation; capture 2 min of pool footage before any
+practice-pool session (new-camera pool colors unmeasured).

@@ -30,10 +30,30 @@ GATE_PICTURE_COLOR = (210, 180, 60)   # task-placard color — distinct from RED
 # The 2026 course uses RED gate posts + RED/WHITE slalom poles; the marker
 # channel is therefore WHITE. For a green-marker course, point
 # MARKER_HSV_RANGE at GREEN_MARKER_HSV_RANGE instead.
-RED_HSV_RANGES = [((0, 40, 40), (15, 100, 100)), ((340, 40, 40), (360, 100, 100))]
+# comp_v5 retune (2026-07-13, comp-venue corpus s10b + S10 regression
+# harness — camerawork analysis/reports/p4_retune_delta.md). Comp water
+# renders red props MAGENTA (H 305-340, S down to ~30); the magenta
+# section carries extra shape/chroma guards in Vision.get_gate_post_blobs.
+# True red keeps the original S>=40 floor (a flat S>=30 admits the lateral
+# cast walls on both camera units). VALID FOR RAW CAMERA OUTPUT ONLY —
+# these bands collapse under gray-world (fly GRAY_WORLD=0).
+RED_HSV_RANGES = [((305, 30, 40), (340, 100, 100)),
+                  ((340, 40, 40), (360, 100, 100)),
+                  ((0, 40, 40), (15, 100, 100))]
 WHITE_HSV_RANGE = [((0, 0, 70), (360, 25, 100))]
 GREEN_MARKER_HSV_RANGE = [((100, 40, 40), (140, 100, 100))]
-MARKER_HSV_RANGE = WHITE_HSV_RANGE
+# White PVC in comp water reads pale BLUE, bright-pinned (measured H
+# 220-240 S 26-47 V 92-100); the old S<=25 white band sits BELOW the
+# pole's S while the sunlit floor floods it 37-54% of frame.
+# V floor 85->75 (loop2, 2026-07-13): V>=85 amputated shadowed pole
+# bottoms, breaking gatelet bottom-alignment; flood defense is the S>=18
+# floor, not V. Gatelet recall ~tripled with this + the pairing envelope.
+BLUE_WHITE_HSV_RANGE = [((195, 18, 75), (255, 55, 100))]
+# HARDWARE deployment keys the marker channel on BLUE_WHITE. NOTE for any
+# sim run from this tree: the sim renders pure white (S=0) which this band
+# cannot see — point MARKER_HSV_RANGE back at WHITE_HSV_RANGE there (the
+# sim/control arc's own checkout is unaffected by this landing).
+MARKER_HSV_RANGE = BLUE_WHITE_HSV_RANGE
 # Legacy alias — older code imports this name for the marker channel.
 GREEN_HSV_RANGE = MARKER_HSV_RANGE
 

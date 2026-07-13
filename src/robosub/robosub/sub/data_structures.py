@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Tuple, Callable
 import numpy as np
 
-from robosub.sub.vision import find_blobs_hsv
+from robosub.sub.vision import find_blobs_hsv, blob_band_hs_median
 from robosub.sub.config import MARKER_HSV_RANGE, RED_HSV_RANGES
 
 
@@ -85,6 +85,10 @@ class Vision:
         # — slalom whites and the orbit marker; see config.MARKER_HSV_RANGE).
         self.marker_blobs: List[Dict] = []
         self.red_blobs:    List[Dict] = []
+        # The exact frame the current blobs were keyed from (comp_v5 guards
+        # re-measure blob pixels; calling image_provider() again mid-tick
+        # could return a NEWER frame on hardware).
+        self._img: Optional[np.ndarray] = None
 
         self._clear_cache()
 
@@ -105,6 +109,7 @@ class Vision:
         Call once per control tick before any task code runs.
         """
         img = self.image_provider()
+        self._img = img
         if img is None:
             self.marker_blobs = []
             self.red_blobs    = []
@@ -127,10 +132,19 @@ class Vision:
     # --- Green pole (marker) ---
 
     def get_best_pole(self) -> Optional[Dict]:
+        # comp_v5 (2026-07-13): aspect floor 1.2 -> 2.5 (human boxes put
+        # real poles at aspect p50 3.5-4.1; sunlit-floor false poles sit
+        # near 1.2-2.5). Blobs truncated by the frame top/bottom keep the
+        # old 1.2 floor — a close pole running off-frame has a collapsed
+        # apparent aspect.
         if not self._found_best_green_pole:
             self._found_best_green_pole = True
-            candidates = [b for b in self.marker_blobs
-                          if b['height'] > b['width'] * 1.2]
+            fh = self._img.shape[0] if self._img is not None else 320
+            candidates = [
+                b for b in self.marker_blobs
+                if b['height'] > b['width'] * 2.5
+                or (b['height'] > b['width'] * 1.2
+                    and (b['min_y'] <= 2 or b['max_y'] >= fh - 2))]
             self._best_green_pole = (max(candidates, key=lambda b: b['area'])
                                      if candidates else None)
         return self._best_green_pole
@@ -187,10 +201,37 @@ class Vision:
         """Red blobs that could plausibly be GATE POSTS: vertical aspect
         (excludes the 2026 maker boxes) and not a slalom-gatelet red. This is
         the ONLY red set gate behaviors should steer by — blind fallbacks
-        that chased raw red_blobs went after the red maker box (W6)."""
-        return [b for b in self.red_blobs
+        that chased raw red_blobs went after the red maker box (W6).
+
+        comp_v5 (2026-07-13): blobs from the MAGENTA band section (median
+        in-band hue 250-335 — the zone comp water shifts red props into,
+        which the pre-comp_v5 band never accepted) carry extra guards:
+        aspect >= 2.5 unless truncated by the frame top/bottom, and inside
+        the lateral cast strips (x < 107 or x > W-107, where the shared
+        housing optics paint magenta walls) a median in-band S >= 55.
+        True-red blobs (hue >= 335 or wrapped 0-15) keep the stock rule —
+        the flat guards regressed the S10 corpus 50+ points (see
+        camerawork analysis/reports/p4_retune_delta.md)."""
+        base = [b for b in self.red_blobs
                 if b['height'] > b['width'] * 1.5
                 and not self._is_slalom_red(b)]
+        if self._img is None:
+            return base
+        fh, fw = self._img.shape[:2]
+        out = []
+        for b in base:
+            hmed, smed = blob_band_hs_median(self._img, b, RED_HSV_RANGES)
+            if not 250.0 < hmed < 335.0:
+                out.append(b)          # true red (incl. 0-15 wrap): stock
+                continue
+            truncated = b['min_y'] <= 2 or b['max_y'] >= fh - 2
+            if b['height'] <= b['width'] * 2.5 and not truncated:
+                continue
+            in_strip = b['center_x'] < 107 or b['center_x'] > fw - 107
+            if in_strip and smed < 55.0:
+                continue
+            out.append(b)
+        return out
 
     def get_gate_pair(self) -> Optional[Tuple[Dict, Dict]]:
         if not self._found_best_gate_pair:
@@ -260,20 +301,26 @@ class Vision:
             for w in whites:
                 # A genuine gatelet's red and white stand at the SAME
                 # distance: similar apparent heights, aligned bottoms, and a
-                # pixel separation set by the course geometry (1.524 m gap /
-                # ~1.3 m pole ≈ 1.2x the apparent height). Without the size
-                # and separation gates, a NEAR red pairs with a FAR white
-                # from the next triplet sitting pixel-adjacent to it — the
-                # "gap middle" then collapses onto the red pole (confirmed:
-                # the vehicle slalomed straight down the red pole line).
+                # pixel separation set by the course geometry. The original
+                # envelope assumed ~1.3 m poles; they are 0.914 m (measured
+                # 2026-07-12), so the old sep cap 2.2x sat BELOW the true
+                # median. loop2 (2026-07-13): envelope re-derived from human
+                # boxes on the comp corpus — true nearest-white pairs: ratio
+                # p5-p95 0.46-1.55, bottoms p95 0.69, sep/mean_h p5 0.39 /
+                # p50 2.08 / p95 2.92 — old constraints passed only 26% of
+                # them, this envelope 83%+ (gatelet recall ~tripled, FP
+                # 0.4->1.7%; sep floor 0.5->0.4 same day: +6 pts at 1-2 m,
+                # zero FP cost). The anti-collapse role (near red + far
+                # white from the next triplet) is kept by the ratio and
+                # bottoms gates; the floor stays >0 for the W6 mode.
                 ratio = w['height'] / max(r['height'], 1)
-                if not (0.55 <= ratio <= 1.8):
+                if not (0.4 <= ratio <= 2.1):
                     continue
-                if abs(r['max_y'] - w['max_y']) > max(r['height'], w['height']) * 0.5:
+                if abs(r['max_y'] - w['max_y']) > max(r['height'], w['height']) * 0.75:
                     continue
                 sep = abs(w['center_x'] - r['center_x'])
                 mean_h = (r['height'] + w['height']) / 2.0
-                if not (0.6 * mean_h <= sep <= 2.2 * mean_h):
+                if not (0.4 * mean_h <= sep <= 3.0 * mean_h):
                     continue
                 if pass_side == 'left' and w['center_x'] >= r['center_x']:
                     continue
