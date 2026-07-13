@@ -1,5 +1,31 @@
 # SYSID RESUME — canonical state. Update BEFORE ending every session.
 
+2026-07-13 (small-pool session analyzed) — **THE SPONTANEOUS 90-DEG TURN +
+RIGHT DRIFT = UNCALIBRATED COMPASS, not control.** BNO055 CALIB_STAT read
+live: mag=0 sys=0 (the smoke-triage soft reset + reboots wiped stored cal).
+NDOF heading boots at ~0 and slews to magnetic over the first seconds
+(traces: 0->223 by t4s in 231058; 357->164 by t10 in 231806). Run 231806:
+compass JUMPED ~170 deg right after the mission captured its heading
+reference -> constant -170 error -> yaw cmd pinned at the cap the WHOLE run
+(all 4 corners +35 = 0.7 x 0.5 rad/s cap, 100% duty, 60+ s) = the visible
+turn-on-arm + the sustained drift the user had to bump. Run 231058 (compass
+happened to converge BEFORE capture): calm hold, corners near-zero mean.
+- DEPTH: PERFECT both holds — 0.40+-0.02 vs 0.4 target. W6 gains healthy at
+  the new shallow target.
+- STRAIGHT 231518: drive window held heading 101-103 (+-3) with the correct
+  corner signature (L-pair -24/-26, R-pair +27/+28) — encouraging.
+- ACTIONS BEFORE NEXT RUN: (1) hand-calibrate the mag (figure-8 + rotations)
+  after every power-up, verify CALIB_STAT mag>=2 (i2c reg 0x35) BEFORE
+  launching; consider persisting/restoring BNO055 cal offsets in the imu
+  node; (2) consider a capture-reference guard: wait for heading stability
+  (std < ~2 deg over 3 s) before latching the reference.
+- STILL OPEN (smoke): m4 one-direction-only was observed under the REMAP
+  pins; motor_sanity has NEVER run under the reverted (correct) pins —
+  re-run it before trusting m4. Roll offset capture varied +2.1 vs -6.5 deg
+  between boots (sub handled during boot?) — keep the sub level + still
+  through stack launch.
+
+
 2026-07-13 (smoke incident triage) — **SMOKE EVENT: sensors ALL CLEARED, two
 real findings.** Passive sweep after the electrical-tube smoke: Pi (no
 undervoltage, clean boot), ESP32+MS5837 (streaming), camera (good frames),
