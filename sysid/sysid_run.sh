@@ -191,7 +191,13 @@ fire_go() {
 }
 
 if [ "$MODE" = "live" ]; then
-  REQUIRED=("/imu:IMU" "/sensors/heading:sensor_bridge" "/sysid/status:runner")
+  # REQUIRE_IMU=0: motor-driver tests do not need the IMU (added 2026-07-13
+  # post-smoke: BNO055 off the bus; heading needs it too via sensor_bridge).
+  if [ "${REQUIRE_IMU:-1}" = "1" ]; then
+    REQUIRED=("/imu:IMU" "/sensors/heading:sensor_bridge" "/sysid/status:runner")
+  else
+    REQUIRED=("/sysid/status:runner")
+  fi
   [ "$WITH_DEPTH" = "true" ] && REQUIRED+=("/sensors/depth:fused depth")
   [ "$WITH_CAMERA" = "true" ] && REQUIRED+=("/camera/image_raw:camera")
   echo "[sysid] readiness gate (up to ${READY_TIMEOUT}s)..."
