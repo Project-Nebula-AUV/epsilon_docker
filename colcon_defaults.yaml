@@ -8,6 +8,14 @@ build:
   symlink-install: true
   merge-install: true
   cmake-args:
+    # Pin CMake to the system python: the /workspace/venv on login-shell PATH
+    # lacks ament_package and poisons fresh CMake configures (cv_bridge,
+    # 2026-07-13). ROS packages must build against the /opt/ros interpreter.
+    - -DPython3_EXECUTABLE=/usr/bin/python3
+    # cv_bridge boost module must compile against the numpy the RUNTIME sees,
+    # which is the venv numpy 2.x (on sys.path container-wide) — system numpy
+    # 1.21 headers produce a binary that segfaults at import (2026-07-13).
+    - -DPython3_NumPy_INCLUDE_DIR=/workspace/venv/lib/python3.10/site-packages/numpy/_core/include
     - -DCMAKE_BUILD_TYPE=Release
     - -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
     - -DBUILD_TESTING=ON
