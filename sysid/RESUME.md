@@ -1,5 +1,25 @@
 # SYSID RESUME — canonical state. Update BEFORE ending every session.
 
+2026-07-13 (post-session) — **STALE INSTALL RECURRED + ROOT-CAUSED: colcon
+defaults were never actually wired.** A plain `colcon build` (~20:15 UTC)
+re-copied robosub+epsilon_bridge into site-packages, silently freezing the
+runtime again (params gate would have refused to arm at the next session).
+Root cause: ws colcon_defaults.yaml was INERT — colcon only reads
+~/.colcon/defaults.yaml or $COLCON_DEFAULTS_FILE, neither existed, so every
+build depended on remembering flags. FIXED durably: (1) symlink-install +
+merge-install added to colcon_defaults.yaml (.pre-symlink.20260713);
+(2) wired via ~/.colcon/defaults.yaml symlink + COLCON_DEFAULTS_FILE export
+in container ~/.bashrc — a bare `colcon build` now does the right thing
+(verified: flag-less rebuild of all 4 python pkgs). Stale copies purged;
+this colcon develop-mode install creates NO site-packages dirs (nothing to
+shadow). VERIFIED end-to-end: NO_ARM bench holdtest 20260713-210255 —
+params gate PASS (imports -> /src/), "control params loaded", mission
+STARTED. Loaded yaml = build/robosub/config/pid_params.yaml -> symlink to
+src (poolside edit + node restart workflow intact, yaw_rate_p 0.7 live).
+NOTE: container rebuild would lose the ~/.colcon + .bashrc wiring — re-run
+the two wiring lines (or check the params gate) after any container recreate.
+
+
 2026-07-13 (latest) — **YAW LIMIT CYCLE DEAD (yaw_rate_p 0.7 verified in water)
 + FIRST CLOSED-LOOP STRAIGHT SHOTS ANALYZED.** Runs: 075059 hold, 080244
 straight@0.3, 080624 straight@0.8-depth1.0 (floor-grind, aborted), 081040
